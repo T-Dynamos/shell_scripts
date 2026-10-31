@@ -335,6 +335,7 @@ Interactive live terminal monitor and power consumption tracker.
 - Full argument parser with configurable refresh rate, `--once` mode, and `--json` export.
 - Graphical charge progress bar (`[███████████████] 100%`).
 - Real-time power draw calculation in milliAmperes (mA) and Watts (W).
+- **Charging CC Comparison**: When charging, automatically compares actual charging current against theoretical Constant Current (CC) target, reporting percentage off (`-9.0% off`), difference in mA, and percentage of target.
 - Live estimation of **Time to empty** (while discharging) or **Time to full** (while charging).
 - Color-coded status alerts (Charging, Discharging, Full).
 - Clean exit on `Ctrl+C` without terminal cursor or traceback glitches.
@@ -350,11 +351,25 @@ td_battery_watch -i 1.0
 # Print single status snapshot and exit (no infinite loop)
 td_battery_watch --once
 
+# Always display CC phase estimate line even when not charging
+td_battery_watch --once --show-cc
+
 # Single snapshot in JSON format
 td_battery_watch --once --json
 
 # Append mode (do not clear screen)
 td_battery_watch --no-clear
+```
+
+#### Example Output (Charging Mode with CC Comparison)
+```text
+Battery       : BAT0
+Status        : Charging
+Charge        : 65.40% [██████████░░░░░] (1125/1721 mAh)
+Current       : 1250.00 mA (~19.50 W)
+CC Phase Est  : 1.37 A (1374 mA)
+CC Comparison : -9.0% off (-124 mA | 91.0% of CC target)
+Time to full  : 23m 48s
 ```
 
 ---

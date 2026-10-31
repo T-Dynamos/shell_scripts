@@ -84,7 +84,7 @@ def make_progress_bar(percent: float, width: int = 20, use_color: bool = True) -
     return f"[{color}{bar}{reset}]"
 
 
-def get_snapshot(bat_dir: Path) -> dict:
+def get_snapshot(bat_dir: Path, factor: float = 80 * 0.998) -> dict:
     """Read current battery state from sysfs."""
     # Check charge first, fallback to energy
     charge_now = read_int(bat_dir / "charge_now")
@@ -106,6 +106,19 @@ def get_snapshot(bat_dir: Path) -> dict:
 
     percent = (charge_now / charge_full) * 100.0
     current_ma = (current_now / 1000.0) if current_now is not None else 0.0
+
+    # Calculate CC phase charging current estimate: cf (µAh) * factor * 1e-8 => Amperes
+    cc_est_a = charge_full * factor * 1e-8
+    cc_est_ma = cc_est_a * 1000.0
+
+    cc_diff_ma = None
+    cc_percent_off = None
+    cc_ratio_pct = None
+
+    if current_ma > 0 and cc_est_ma > 0:
+        cc_diff_ma = current_ma - cc_est_ma
+        cc_percent_off = (cc_diff_ma / cc_est_ma) * 100.0
+        cc_ratio_pct = (current_ma / cc_est_ma) * 100.0
 
     # Calculate wattage if voltage is available
     power_w = None
@@ -142,6 +155,11 @@ def get_snapshot(bat_dir: Path) -> dict:
         "unit": unit,
         "current_ma": round(current_ma, 2),
         "power_w": round(power_w, 2) if power_w is not None else None,
+        "cc_phase_estimate_a": round(cc_est_a, 2),
+        "cc_phase_estimate_ma": round(cc_est_ma, 1),
+        "cc_diff_ma": round(cc_diff_ma, 1) if cc_diff_ma is not None else None,
+        "cc_percent_off": round(cc_percent_off, 2) if cc_percent_off is not None else None,
+        "cc_ratio_percent": round(cc_ratio_pct, 2) if cc_ratio_pct is not None else None,
         "time_label": time_label,
         "time_remaining_str": time_val,
         "time_remaining_seconds": round(time_sec, 1) if time_sec is not None else None,
@@ -193,6 +211,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not clear screen between updates (append/scroll mode).",
     )
     parser.add_argument(
+        "--factor",
+        type=float,
+        default=80 * 0.998,
+        help="CC phase estimation factor constant (default: 79.84).",
+    )
+    parser.add_argument(
+        "--show-cc",
+        action="store_true",
+        help="Always display CC phase estimate line even when not charging.",
+    )
+    parser.add_argument(
         "--no-bar",
         action="store_true",
         help="Hide graphical charge progress bar.",
@@ -233,6 +262,34 @@ def print_dashboard(data: dict, show_bar: bool = True, use_color: bool = True) -
 
     power_suffix = f" (~{data['power_w']:.2f} W)" if data["power_w"] is not None else ""
     print(f"{bold}Current       :{reset} {data['current_ma']:.2f} mA{power_suffix}")
+
+    # Display CC comparison when charging, or if requested via --show-cc
+    is_charging = data["status"].lower() == "charging"
+    if is_charging and data["cc_percent_off"] is not None:
+        pct_off = data["cc_percent_off"]
+        sign = "+" if pct_off >= 0 else ""
+        diff_ma = data["cc_diff_ma"]
+        diff_sign = "+" if diff_ma >= 0 else ""
+        ratio = data["cc_ratio_percent"]
+
+        if use_color:
+            if abs(pct_off) <= 15.0:
+                color_comp = "\033[1;32m"  # Green: within standard CC range
+            elif pct_off < -50.0:
+                color_comp = "\033[1;36m"  # Cyan: CV tapering phase
+            elif pct_off < 0:
+                color_comp = "\033[1;33m"  # Yellow: below CC target
+            else:
+                color_comp = "\033[1;35m"  # Magenta: above CC target
+            comp_str = f"{color_comp}{sign}{pct_off:.1f}% off{reset} ({diff_sign}{diff_ma:.0f} mA | {ratio:.1f}% of CC target)"
+        else:
+            comp_str = f"{sign}{pct_off:.1f}% off ({diff_sign}{diff_ma:.0f} mA | {ratio:.1f}% of CC target)"
+
+        print(f"{bold}CC Phase Est  :{reset} {data['cc_phase_estimate_a']:.2f} A ({data['cc_phase_estimate_ma']:.0f} mA)")
+        print(f"{bold}CC Comparison :{reset} {comp_str}")
+    elif data.get("show_cc") and data.get("cc_phase_estimate_a") is not None:
+        print(f"{bold}CC Phase Est  :{reset} {data['cc_phase_estimate_a']:.2f} A ({data['cc_phase_estimate_ma']:.0f} mA)")
+
     print(f"{bold}{data['time_label']:<14}:{reset} {data['time_remaining_str']}")
 
 
@@ -264,7 +321,8 @@ def main() -> int:
     # Single snapshot mode
     if args.once:
         try:
-            snap = get_snapshot(bat_dir)
+            snap = get_snapshot(bat_dir, factor=args.factor)
+            snap["show_cc"] = args.show_cc
         except Exception as e:
             sys.stderr.write(f"Error reading battery: {e}\n")
             return 1
@@ -279,7 +337,8 @@ def main() -> int:
     try:
         while True:
             try:
-                snap = get_snapshot(bat_dir)
+                snap = get_snapshot(bat_dir, factor=args.factor)
+                snap["show_cc"] = args.show_cc
             except Exception:
                 time.sleep(args.interval)
                 continue
