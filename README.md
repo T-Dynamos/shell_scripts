@@ -365,6 +365,7 @@ td_battery_watch --no-clear
 ```text
 Battery       : BAT0
 Status        : Charging
+Health        : 78.23% (1721/2200 mAh)
 Charge        : 65.40% [██████████░░░░░] (1125/1721 mAh)
 Current       : 1250.00 mA (~19.50 W)
 CC Phase Est  : 1.37 A (1374 mA)
