@@ -29,6 +29,12 @@ SCRIPTS = {
         "example": "td_battery_watch -i 1.0",
         "category": "System & Hardware",
     },
+    "td_tmp_clean": {
+        "title": "Temp Image Cleaner",
+        "summary": "Clean temporary images and math renders from /tmp with dry-run and age filters.",
+        "example": "td_tmp_clean --dry-run",
+        "category": "Maintenance & Cleanup",
+    },
     "td_script_info": {
         "title": "Scripts Catalog & Quick Help",
         "summary": "Summarize all td_* scripts with one-line descriptions, categories, and command examples.",
