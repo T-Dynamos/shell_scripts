@@ -91,21 +91,12 @@ def generate_fish_from_parser(cmd_name: str, parser: argparse.ArgumentParser) ->
             if any(k in metavar for k in ("file", "path", "image", "img", "output")):
                 has_file_positional = True
 
+            # Only suggest explicit finite choices (e.g. td_script_info script choices)
+            # Never inject raw multi-word string templates into positional completions.
             if a.choices:
                 choices_str = " ".join(str(c) for c in a.choices)
                 desc = (a.help or f"Choose {a.dest}").replace('"', r"\"")
-                lines.append(f'complete -c {cmd_name} -f -a "{choices_str}" -d "{desc}"')
-            elif cmd_name == "td_math2img" and a.dest == "expression":
-                # Provide common quick LaTeX math templates for tab completion
-                sample_templates = (
-                    r"'\frac{-b \pm \sqrt{b^2-4ac}}{2a}' "
-                    r"'e^{i\pi} + 1 = 0' "
-                    r"'\int_{-\infty}^{\infty} e^{-x^2} dx' "
-                    r"'\sum_{i=1}^n i = \frac{n(n+1)}{2}' "
-                    r"'\lim_{x \to 0} \frac{\sin x}{x} = 1'"
-                )
-                desc = (a.help or "LaTeX math expression").replace('"', r"\"")
-                lines.append(f'complete -c {cmd_name} -f -a "{sample_templates}" -d "{desc}"')
+                lines.append(f'complete -c {cmd_name} -n "__fish_is_first_token" -f -a "{choices_str}" -d "{desc}"')
 
     # If the command does not take files as positional arguments, disable default file completion
     if not has_file_positional:
