@@ -9,6 +9,7 @@ import os
 import time
 import glob
 import json
+import atexit
 import argparse
 from pathlib import Path
 
@@ -220,6 +221,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not clear screen between updates (append/scroll mode).",
     )
     parser.add_argument(
+        "--full-clear",
+        action="store_true",
+        help="Clear entire terminal screen on each update instead of in-place redraw.",
+    )
+    parser.add_argument(
         "--factor",
         type=float,
         default=80 * 0.998,
@@ -243,10 +249,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def print_dashboard(data: dict, show_bar: bool = True, use_color: bool = True) -> None:
-    """Print formatted terminal dashboard."""
+def format_dashboard(data: dict, show_bar: bool = True, use_color: bool = True) -> list[str]:
+    """Format dashboard data into a list of terminal text lines."""
     bold = "\033[1m" if use_color else ""
     reset = "\033[0m" if use_color else ""
+    lines = []
 
     status_str = data["status"]
     if use_color:
@@ -262,8 +269,8 @@ def print_dashboard(data: dict, show_bar: bool = True, use_color: bool = True) -
     if show_bar:
         bar_str = f" {make_progress_bar(data['percentage'], width=15, use_color=use_color)}"
 
-    print(f"{bold}Battery       :{reset} {data['battery']}")
-    print(f"{bold}Status        :{reset} {status_str}")
+    lines.append(f"{bold}Battery       :{reset} {data['battery']}")
+    lines.append(f"{bold}Status        :{reset} {status_str}")
 
     # Indicate battery health and design capacity
     if data.get("health_percent") is not None:
@@ -280,19 +287,19 @@ def print_dashboard(data: dict, show_bar: bool = True, use_color: bool = True) -
             h_str = f"{hp:.2f}%"
 
         des_str = f" ({data['charge_full']:.0f}/{data['charge_design']:.0f} {data['unit']})" if data.get("charge_design") else ""
-        print(f"{bold}Health        :{reset} {h_str}{des_str}")
+        lines.append(f"{bold}Health        :{reset} {h_str}{des_str}")
 
-    print(
+    lines.append(
         f"{bold}Charge        :{reset} {data['percentage']:.2f}%{bar_str} "
         f"({data['charge_now']:.0f}/{data['charge_full']:.0f} {data['unit']})"
     )
 
     power_suffix = f" (~{data['power_w']:.2f} W)" if data["power_w"] is not None else ""
-    print(f"{bold}Current       :{reset} {data['current_ma']:.2f} mA{power_suffix}")
+    lines.append(f"{bold}Current       :{reset} {data['current_ma']:.2f} mA{power_suffix}")
 
     # Always indicate CC phase estimate
     if data.get("cc_phase_estimate_a") is not None:
-        print(f"{bold}CC Phase Est  :{reset} {data['cc_phase_estimate_a']:.2f} A ({data['cc_phase_estimate_ma']:.0f} mA)")
+        lines.append(f"{bold}CC Phase Est  :{reset} {data['cc_phase_estimate_a']:.2f} A ({data['cc_phase_estimate_ma']:.0f} mA)")
 
     # When charging, display comparison against actual charging current
     is_charging = data["status"].lower() == "charging"
@@ -316,9 +323,24 @@ def print_dashboard(data: dict, show_bar: bool = True, use_color: bool = True) -
         else:
             comp_str = f"{sign}{pct_off:.1f}% off ({diff_sign}{diff_ma:.0f} mA | {ratio:.1f}% of CC target)"
 
-        print(f"{bold}CC Comparison :{reset} {comp_str}")
+        lines.append(f"{bold}CC Comparison :{reset} {comp_str}")
 
-    print(f"{bold}{data['time_label']:<14}:{reset} {data['time_remaining_str']}")
+    lines.append(f"{bold}{data['time_label']:<14}:{reset} {data['time_remaining_str']}")
+    return lines
+
+
+def print_dashboard(data: dict, show_bar: bool = True, use_color: bool = True) -> int:
+    """Print formatted terminal dashboard and return number of lines printed."""
+    lines = format_dashboard(data, show_bar=show_bar, use_color=use_color)
+    print("\n".join(lines))
+    return len(lines)
+
+
+def restore_cursor():
+    """Ensure cursor visibility is restored on program exit."""
+    if sys.stdout.isatty():
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
 
 
 def main() -> int:
@@ -326,6 +348,7 @@ def main() -> int:
     args = parser.parse_args()
 
     use_color = sys.stdout.isatty() and not args.no_color
+    atexit.register(restore_cursor)
 
     # Resolve battery directory
     bat_dir = None
@@ -361,7 +384,12 @@ def main() -> int:
             print_dashboard(snap, show_bar=not args.no_bar, use_color=use_color)
         return 0
 
-    # Continuous monitoring loop
+    # In continuous monitoring mode: hide cursor for flicker-free in-place updating
+    if use_color and not args.no_clear:
+        sys.stdout.write("\033[?25l")
+        sys.stdout.flush()
+
+    last_lines_count = 0
     try:
         while True:
             try:
@@ -374,17 +402,30 @@ def main() -> int:
             if args.json:
                 print(json.dumps(snap))
             else:
+                lines = format_dashboard(snap, show_bar=not args.no_bar, use_color=use_color)
                 if not args.no_clear:
-                    # Clear screen and move cursor to top-left
-                    print("\033[2J\033[H", end="")
-                print_dashboard(snap, show_bar=not args.no_bar, use_color=use_color)
+                    if args.full_clear:
+                        # Full screen clear
+                        sys.stdout.write("\033[2J\033[H")
+                    elif last_lines_count > 0:
+                        # In-place redraw: move cursor up to the start of this command's output
+                        # and erase only downwards, preserving all shell output above it!
+                        sys.stdout.write(f"\033[{last_lines_count}A\r\033[J")
+
+                sys.stdout.write("\n".join(lines) + "\n")
+                sys.stdout.flush()
+                last_lines_count = len(lines)
 
             time.sleep(args.interval)
 
     except KeyboardInterrupt:
+        pass
+    finally:
+        restore_cursor()
         if not args.no_clear and not args.json:
             print("\nMonitoring stopped.")
-        return 0
+
+    return 0
 
 
 if __name__ == "__main__":

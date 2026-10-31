@@ -338,11 +338,12 @@ Interactive live terminal monitor and power consumption tracker.
 - **Charging CC Comparison**: When charging, automatically compares actual charging current against theoretical Constant Current (CC) target, reporting percentage off (`-9.0% off`), difference in mA, and percentage of target.
 - Live estimation of **Time to empty** (while discharging) or **Time to full** (while charging).
 - Color-coded status alerts (Charging, Discharging, Full).
-- Clean exit on `Ctrl+C` without terminal cursor or traceback glitches.
+- **In-place redraw**: Clears and updates only from where the command started, preserving your terminal history and scrollback above the command.
+- Clean exit on `Ctrl+C` without terminal cursor or traceback glitches (cursor is hidden during live monitor and cleanly restored on exit).
 
 #### Usage
 ```bash
-# Live dashboard (default 0.5s refresh)
+# Live dashboard (default 0.5s refresh, in-place redraw)
 td_battery_watch
 
 # Custom refresh interval
@@ -359,6 +360,9 @@ td_battery_watch --once --json
 
 # Append mode (do not clear screen)
 td_battery_watch --no-clear
+
+# Legacy full-screen clear mode
+td_battery_watch --full-clear
 ```
 
 #### Example Output (Charging Mode with CC Comparison)
