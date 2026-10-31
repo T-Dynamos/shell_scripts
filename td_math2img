@@ -28,11 +28,35 @@ except ImportError:
     sys.exit(1)
 
 
-def _setup_unicode_math_fallback() -> None:
-    """Ensure mathtext fontsets (like cm and stix) seamlessly fall back to Unicode fonts
+def find_latin_modern_fonts() -> dict[str, str]:
+    """Locate bundled or system Latin Modern (Unicode Computer Modern) OpenType fonts."""
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    search_dirs = [
+        os.path.join(script_dir, "td_script_data", "fonts"),
+        os.path.join(script_dir, "..", "td_script_data", "fonts"),
+        os.path.expanduser("~/.local/bin/td_script_data/fonts"),
+        os.path.expanduser("~/.local/share/fonts"),
+        "/usr/share/fonts/OTF",
+        "/usr/share/fonts/latin-modern",
+    ]
+    fonts = {}
+    for d in search_dirs:
+        if not os.path.isdir(d):
+            continue
+        reg = os.path.join(d, "lmroman10-regular.otf")
+        if os.path.isfile(reg):
+            fonts["rm"] = os.path.abspath(reg)
+            fonts["it"] = os.path.abspath(os.path.join(d, "lmroman10-italic.otf"))
+            fonts["bf"] = os.path.abspath(os.path.join(d, "lmroman10-bold.otf"))
+            break
+    return fonts
 
-    for characters (such as Indic/IAST transliterations, diacritics, CJK, etc.) missing
-    from classic TeX 7-bit font encodings.
+
+def _setup_unicode_math_fallback() -> None:
+    """Ensure mathtext fontsets (like cm and stix) seamlessly support Unicode diacritics
+
+    and Indic transliterations by upgrading classic TeX Roman to Latin Modern Unicode,
+    with an automatic system font fallback chain.
     """
     try:
         from matplotlib import _mathtext
@@ -40,6 +64,25 @@ def _setup_unicode_math_fallback() -> None:
         if getattr(_setup_unicode_math_fallback, "_installed", False):
             return
 
+        # 1. Upgrade BakomaFonts (Computer Modern) with Latin Modern Roman Unicode if available
+        lm_fonts = find_latin_modern_fonts()
+        if lm_fonts and "rm" in lm_fonts and os.path.isfile(lm_fonts["rm"]):
+            orig_bakoma_init = _mathtext.BakomaFonts.__init__
+
+            def patched_bakoma_init(self, default_font_prop, load_glyph_flags):
+                orig_bakoma_init(self, default_font_prop, load_glyph_flags)
+                self.fontmap["rm"] = lm_fonts["rm"]
+                self.fontmap["cmr10"] = lm_fonts["rm"]
+                if "it" in lm_fonts and os.path.isfile(lm_fonts["it"]):
+                    self.fontmap["it"] = lm_fonts["it"]
+                    self.fontmap["cmti10"] = lm_fonts["it"]
+                if "bf" in lm_fonts and os.path.isfile(lm_fonts["bf"]):
+                    self.fontmap["bf"] = lm_fonts["bf"]
+                    self.fontmap["cmb10"] = lm_fonts["bf"]
+
+            _mathtext.BakomaFonts.__init__ = patched_bakoma_init
+
+        # 2. Setup universal Unicode fallback chain for any missing glyphs
         class UnicodeFallbackFonts(_mathtext.TruetypeFonts):
             def __init__(self, default_font_prop, load_glyph_flags):
                 super().__init__(default_font_prop, load_glyph_flags)
