@@ -199,8 +199,8 @@ def build_parser() -> argparse.ArgumentParser:
         "-i",
         "--interval",
         type=float,
-        default=0.5,
-        help="Refresh interval in seconds (default: 0.5).",
+        default=0.1,
+        help="Refresh interval in seconds (default: 0.1 for near-instant up-to-date data).",
     )
     parser.add_argument(
         "-1",
@@ -384,39 +384,61 @@ def main() -> int:
             print_dashboard(snap, show_bar=not args.no_bar, use_color=use_color)
         return 0
 
+    # Validate minimum interval to avoid busy-looping
+    interval = max(0.01, args.interval)
+
     # In continuous monitoring mode: hide cursor for flicker-free in-place updating
     if use_color and not args.no_clear:
         sys.stdout.write("\033[?25l")
         sys.stdout.flush()
 
     last_lines_count = 0
+    last_rendered_text = None
+    ticks_since_draw = 0
+    max_unchanged_ticks = max(1, int(1.0 / interval))
+
     try:
         while True:
             try:
                 snap = get_snapshot(bat_dir, factor=args.factor)
                 snap["show_cc"] = args.show_cc
             except Exception:
-                time.sleep(args.interval)
+                time.sleep(interval)
                 continue
 
             if args.json:
                 print(json.dumps(snap))
             else:
                 lines = format_dashboard(snap, show_bar=not args.no_bar, use_color=use_color)
-                if not args.no_clear:
-                    if args.full_clear:
-                        # Full screen clear
-                        sys.stdout.write("\033[2J\033[H")
-                    elif last_lines_count > 0:
-                        # In-place redraw: move cursor up to the start of this command's output
-                        # and erase only downwards, preserving all shell output above it!
-                        sys.stdout.write(f"\033[{last_lines_count}A\r\033[J")
+                rendered_text = "\n".join(lines) + "\n"
 
-                sys.stdout.write("\n".join(lines) + "\n")
-                sys.stdout.flush()
-                last_lines_count = len(lines)
+                # Check if content changed or if periodic refresh is due
+                should_draw = (
+                    args.no_clear
+                    or args.full_clear
+                    or last_lines_count == 0
+                    or rendered_text != last_rendered_text
+                    or ticks_since_draw >= max_unchanged_ticks
+                )
 
-            time.sleep(args.interval)
+                if should_draw:
+                    if not args.no_clear:
+                        if args.full_clear:
+                            sys.stdout.write("\033[2J\033[H")
+                        elif last_lines_count > 0:
+                            # In-place redraw: move cursor up to the start of this command's output
+                            # and erase only downwards, preserving all shell output above it!
+                            sys.stdout.write(f"\033[{last_lines_count}A\r\033[J")
+
+                    sys.stdout.write(rendered_text)
+                    sys.stdout.flush()
+                    last_lines_count = len(lines)
+                    last_rendered_text = rendered_text
+                    ticks_since_draw = 0
+                else:
+                    ticks_since_draw += 1
+
+            time.sleep(interval)
 
     except KeyboardInterrupt:
         pass

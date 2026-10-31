@@ -343,10 +343,10 @@ Interactive live terminal monitor and power consumption tracker.
 
 #### Usage
 ```bash
-# Live dashboard (default 0.5s refresh, in-place redraw)
+# Live dashboard (ultra-responsive default 0.1s / 100ms refresh, in-place redraw)
 td_battery_watch
 
-# Custom refresh interval
+# Custom refresh interval (e.g. 0.5s or 1.0s)
 td_battery_watch -i 1.0
 
 # Print single status snapshot and exit (no infinite loop)
