@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-td_math2png - Render LaTeX math expressions to high-resolution PNG images,
+td_math2img - Render LaTeX math expressions to high-resolution images (PNG/SVG),
 copy them to the Wayland clipboard via wl-copy, and optionally view them in swayimg.
 """
 
@@ -47,7 +47,7 @@ def normalize_expression(expr: str) -> str:
     return expr
 
 
-def render_math_to_png(
+def render_math_to_image(
     lines: list[str],
     out_path: str,
     dpi: int = 300,
@@ -58,7 +58,7 @@ def render_math_to_png(
     pad_px: int = 16,
     fontset: str = "cm",
 ) -> None:
-    """Render one or more lines of LaTeX math into a cropped, padded PNG."""
+    """Render one or more lines of LaTeX math into a cropped, padded image (PNG, SVG, etc.)."""
     plt.rcParams.update({
         "mathtext.fontset": fontset,
         "font.family": "serif",
@@ -128,21 +128,31 @@ def render_math_to_png(
     )
 
 
-def copy_with_wl_copy(png_path: str, primary: bool = False, quiet: bool = False) -> bool:
-    """Copy the rendered PNG to the Wayland clipboard using wl-copy."""
+def copy_with_wl_copy(img_path: str, primary: bool = False, quiet: bool = False) -> bool:
+    """Copy the rendered image to the Wayland clipboard using wl-copy."""
     wl_copy_bin = shutil.which("wl-copy")
     if not wl_copy_bin:
         if not quiet:
             sys.stderr.write("Warning: 'wl-copy' not found. Clipboard copy skipped.\n")
         return False
 
-    cmd = [wl_copy_bin, "-t", "image/png"]
+    ext = os.path.splitext(img_path)[1].lower()
+    if ext == ".svg":
+        mime_type = "image/svg+xml"
+    elif ext in [".jpg", ".jpeg"]:
+        mime_type = "image/jpeg"
+    elif ext == ".pdf":
+        mime_type = "application/pdf"
+    else:
+        mime_type = "image/png"
+
+    cmd = [wl_copy_bin, "-t", mime_type]
     if primary:
         cmd.append("-p")
 
     try:
-        with open(png_path, "rb") as f:
-            png_bytes = f.read()
+        with open(img_path, "rb") as f:
+            img_bytes = f.read()
 
         # Detach in its own session so wl-copy stays alive as a daemon to serve paste requests
         proc = subprocess.Popen(
@@ -150,7 +160,7 @@ def copy_with_wl_copy(png_path: str, primary: bool = False, quiet: bool = False)
             stdin=subprocess.PIPE,
             start_new_session=True,
         )
-        proc.communicate(input=png_bytes)
+        proc.communicate(input=img_bytes)
 
         if proc.returncode != 0:
             if not quiet:
@@ -159,7 +169,7 @@ def copy_with_wl_copy(png_path: str, primary: bool = False, quiet: bool = False)
 
         if not quiet:
             target = "primary selection" if primary else "clipboard"
-            print(f"Copied image to Wayland {target} via wl-copy.")
+            print(f"Copied image ({mime_type}) to Wayland {target} via wl-copy.")
         return True
     except Exception as e:
         if not quiet:
@@ -208,15 +218,16 @@ def view_in_swayimg(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="td_math2png",
-        description="Render a LaTeX math expression to PNG, copy to clipboard with wl-copy, and view with swayimg.",
+        prog="td_math2img",
+        description="Render a LaTeX math expression to an image (PNG/SVG), copy to clipboard with wl-copy, and view with swayimg.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
   %(prog)s '\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}'
-  %(prog)s '\\int_0^\\infty e^{-x} dx = 1' --show
+  %(prog)s --save formula.png '\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}'
+  %(prog)s -s '\\int_0^\\infty e^{-x} dx = 1'
   %(prog)s -s -t '\\sum_{k=1}^n k = \\frac{n(n+1)}{2}'
   %(prog)s -d -s '\\mathbf{F} = m \\mathbf{a}'
-  %(prog)s -o formula.png '\\lim_{x \\to 0} \\frac{\\sin x}{x} = 1'
+  %(prog)s --save formula.svg '\\lim_{x \\to 0} \\frac{\\sin x}{x} = 1'
   echo '\\alpha^2 + \\beta^2 = \\gamma^2' | %(prog)s --show
 """,
     )
@@ -227,12 +238,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="LaTeX math formula (e.g. '\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}'). Reads from stdin if omitted or '-'.",
     )
 
-    # Output options
+    # Output / Save options
     parser.add_argument(
+        "--save",
         "-o",
         "--output",
+        dest="output",
         metavar="FILE",
-        help="Save PNG to specified path (default: timestamped temp file in /tmp).",
+        help="Save image to specified path (e.g. --save formula.png or -o formula.svg). Defaults to temp file in /tmp.",
     )
 
     # Viewer options
@@ -380,13 +393,15 @@ def main() -> int:
     # Determine output file path
     if args.output:
         out_path = os.path.abspath(args.output)
+        if not os.path.splitext(out_path)[1]:
+            out_path += ".png"
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         out_path = os.path.join(tempfile.gettempdir(), f"math_{timestamp}.png")
 
     # Render image
     try:
-        render_math_to_png(
+        render_math_to_image(
             lines=lines,
             out_path=out_path,
             dpi=args.dpi,

@@ -11,10 +11,10 @@ import shutil
 import argparse
 
 SCRIPTS = {
-    "td_math2png": {
-        "title": "LaTeX Math to PNG & Clipboard",
-        "summary": "Render LaTeX math expressions to high-resolution PNG, copy to Wayland clipboard with wl-copy, and preview in swayimg.",
-        "example": "td_math2png -s '\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}'",
+    "td_math2img": {
+        "title": "LaTeX Math to Image (PNG/SVG) & Clipboard",
+        "summary": "Render LaTeX math expressions to high-res images (PNG/SVG), copy to Wayland clipboard with wl-copy, and preview in swayimg.",
+        "example": "td_math2img --save formula.png '\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}'",
         "category": "Graphics & Math",
     },
     "td_battery_info": {

@@ -11,9 +11,9 @@ The scripts require Python 3 and a few desktop tools depending on the utility:
 | Dependency | Purpose | Required by |
 |---|---|---|
 | `python3` | Script execution runtime | All scripts |
-| `python-matplotlib` | Standalone LaTeX math engine and PNG rendering | `td_math2png` |
-| `wl-clipboard` (`wl-copy`) | Copying images and text to Wayland clipboard | `td_math2png` |
-| `swayimg` | Wayland-native image viewer | `td_math2png` (optional, for viewing) |
+| `python-matplotlib` | Standalone LaTeX math engine and PNG rendering | `td_math2img` |
+| `wl-clipboard` (`wl-copy`) | Copying images and text to Wayland clipboard | `td_math2img` |
+| `swayimg` | Wayland-native image viewer | `td_math2img` (optional, for viewing) |
 | `/sys/class/power_supply/` | Linux kernel battery sysfs interface | `td_battery_info`, `td_battery_watch` |
 
 ### One-line prerequisite installation
@@ -161,27 +161,28 @@ Interactive directory and summary utility for all scripts in the suite.
 #### Features
 - Displays one-line description and copy-pasteable example command for every script.
 - Shows whether each script is currently installed in your `$PATH`.
-- Supports filtering by specific script name (`td_script_info td_math2png`).
+- Supports filtering by specific script name (`td_script_info td_math2img`).
 - Supports `--json` for scripting integration and `--compact` for quick glances.
 
 #### Usage
 ```bash
 td_script_info
-td_script_info td_math2png
+td_script_info td_math2img
 td_script_info --compact
 td_script_info --json
 ```
 
 ---
 
-### 2. `td_math2png`
+### 2. `td_math2img`
 
-Renders LaTeX math formulas directly to high-resolution PNG images, copies them to the Wayland clipboard via `wl-copy`, and optionally displays them in `swayimg`. Uses Computer Modern serif math typography (`mathtext.fontset: cm`, `font.family: serif`).
+Renders LaTeX math formulas directly to high-resolution images (PNG, SVG, etc.), copies them to the Wayland clipboard via `wl-copy`, and optionally displays them in `swayimg`. Uses Computer Modern serif math typography (`mathtext.fontset: cm`, `font.family: serif`).
 
 #### Features
 - Accepts expressions as CLI arguments or piped from `stdin`.
 - Automatically strips outer `$...$`, `$$...$$`, `\[...\]`, or `\displaystyle`.
-- Directly copies the image to the Wayland clipboard (`image/png`) via a detached `wl-copy` session.
+- Directly saves output via `--save {imgpath}` or `-o {imgpath}` (supports `.png`, `.svg`, etc.).
+- Copies the image to the Wayland clipboard (`image/png`, `image/svg+xml`) via a detached `wl-copy` session.
 - Seamless preview in `swayimg` (foreground or detached background).
 - Supports transparent backgrounds (`-t`), dark theme preset (`-d`), custom colors, DPI, and font sizes.
 
@@ -189,25 +190,28 @@ Renders LaTeX math formulas directly to high-resolution PNG images, copies them 
 
 ```bash
 # Render and copy quadratic formula to clipboard
-td_math2png '\frac{-b \pm \sqrt{b^2-4ac}}{2a}'
+td_math2img '\frac{-b \pm \sqrt{b^2-4ac}}{2a}'
+
+# Save image to a specific path using --save
+td_math2img --save formula.png '\frac{-b \pm \sqrt{b^2-4ac}}{2a}'
+
+# Save as vector SVG
+td_math2img --save formula.svg '\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}'
 
 # Render, copy to clipboard, and open in swayimg
-td_math2png -s '\frac{-b \pm \sqrt{b^2-4ac}}{2a}'
+td_math2img -s '\frac{-b \pm \sqrt{b^2-4ac}}{2a}'
 
 # Open in swayimg in the background (does not block terminal)
-td_math2png -s --detach '\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}'
+td_math2img -s --detach '\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}'
 
 # Render with a transparent background
-td_math2png -t -s '\sum_{k=1}^n k = \frac{n(n+1)}{2}'
+td_math2img -t -s '\sum_{k=1}^n k = \frac{n(n+1)}{2}'
 
 # Dark mode theme (white text on dark background)
-td_math2png -d -s '\mathbf{F} = m \mathbf{a}'
-
-# Save output to a specific PNG file
-td_math2png -o formula.png '\lim_{x \to 0} \frac{\sin x}{x} = 1'
+td_math2img -d -s '\mathbf{F} = m \mathbf{a}'
 
 # Read formula from stdin
-echo '\alpha^2 + \beta^2 = \gamma^2' | td_math2png -s
+echo '\alpha^2 + \beta^2 = \gamma^2' | td_math2img -s
 ```
 
 #### Options Reference
@@ -215,10 +219,10 @@ echo '\alpha^2 + \beta^2 = \gamma^2' | td_math2png -s
 | Option | Description |
 |---|---|
 | `expression` | LaTeX formula string. Reads from `stdin` if omitted or `-`. |
+| `--save, -o, --output FILE` | Destination image file path (e.g. `--save formula.png` or `-o formula.svg`). Defaults to temp file in `/tmp/math_*.png`. |
 | `-s, --show, --view` | Open the rendered image in `swayimg`. |
 | `--detach` | Launch `swayimg` in the background (detaches from terminal). |
 | `--swayimg-args ARGS` | Pass custom arguments to `swayimg` (e.g. `'--swayimg-args="-S 600,400"'`). |
-| `-o, --output FILE` | Output PNG file path (default: temporary file in `/tmp/math_*.png`). |
 | `-n, --no-copy` | Do not copy the rendered image to the clipboard. |
 | `-p, --primary` | Copy to the Wayland primary selection instead of the clipboard. |
 | `-t, --transparent` | Render with a transparent background. |

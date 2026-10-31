@@ -9,7 +9,7 @@ echo "==> Installing / Updating T-Dynamos shell_scripts into ${INSTALL_DIR}..."
 mkdir -p "${INSTALL_DIR}"
 
 # If already inside the repo directory, install directly from working copy
-if [[ -f "./td_script_info" && -f "./td_math2png" ]]; then
+if [[ -f "./td_script_info" && -f "./td_math2img" ]]; then
     echo "==> Installing directly from local repository..."
     install -m 755 -v td_* "${INSTALL_DIR}/"
 else
