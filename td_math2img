@@ -28,6 +28,77 @@ except ImportError:
     sys.exit(1)
 
 
+def _setup_unicode_math_fallback() -> None:
+    """Ensure mathtext fontsets (like cm and stix) seamlessly fall back to Unicode fonts
+
+    for characters (such as Indic/IAST transliterations, diacritics, CJK, etc.) missing
+    from classic TeX 7-bit font encodings.
+    """
+    try:
+        from matplotlib import _mathtext
+
+        if getattr(_setup_unicode_math_fallback, "_installed", False):
+            return
+
+        class UnicodeFallbackFonts(_mathtext.TruetypeFonts):
+            def __init__(self, default_font_prop, load_glyph_flags):
+                super().__init__(default_font_prop, load_glyph_flags)
+                font_serif = fm.findfont(fm.FontProperties(family=["DejaVu Serif", "Noto Serif", "serif"]))
+                font_sans = fm.findfont(fm.FontProperties(family=["DejaVu Sans", "Noto Sans", "sans-serif"]))
+                font_mono = fm.findfont(fm.FontProperties(family=["DejaVu Sans Mono", "monospace"]))
+                self.fontmap = {
+                    "rm": font_serif,
+                    "it": font_serif,
+                    "bf": font_serif,
+                    "normal": font_serif,
+                    "sf": font_sans,
+                    "tt": font_mono,
+                }
+                self._glyph_cache = {}
+
+            def _get_glyph(self, fontname, font_class, sym):
+                key = fontname if fontname in self.fontmap else "rm"
+                font = self._get_font(key)
+                num = ord(sym) if len(sym) == 1 else _mathtext.get_unicode_index(sym)
+                slanted = (fontname in ("it", "normal"))
+
+                if font is not None and font.get_char_index(num) != 0:
+                    return font, num, slanted
+
+                if num in self._glyph_cache:
+                    alt_font = self._glyph_cache[num]
+                    if alt_font is not None:
+                        return alt_font, num, slanted
+
+                for f in fm.fontManager.ttflist:
+                    try:
+                        candidate = _mathtext.get_font(f.fname)
+                        if candidate.get_char_index(num) != 0:
+                            self._glyph_cache[num] = candidate
+                            return candidate, num, slanted
+                    except Exception:
+                        continue
+
+                self._glyph_cache[num] = None
+                font_rm = self._get_font("rm")
+                return font_rm, num, False
+
+        orig_stix_init = _mathtext.StixFonts.__init__
+
+        def patched_stix_init(self, default_font_prop, load_glyph_flags):
+            orig_stix_init(self, default_font_prop, load_glyph_flags)
+            if not getattr(self, "_fallback_font", None):
+                self._fallback_font = UnicodeFallbackFonts(default_font_prop, load_glyph_flags)
+
+        _mathtext.StixFonts.__init__ = patched_stix_init
+        _setup_unicode_math_fallback._installed = True
+    except Exception:
+        pass
+
+
+_setup_unicode_math_fallback()
+
+
 def normalize_expression(expr: str) -> str:
     """Strip extraneous delimiters like $$, $, \\[, \\], \\displaystyle, etc."""
     expr = expr.strip()
