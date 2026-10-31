@@ -143,11 +143,13 @@ All scripts in this repository follow standard conventions to maintain consisten
 6. **Document in `README.md`**:
    Add a section under **Included Scripts** documenting features, options, and usage examples.
 
-7. **Test and Install**:
+7. **Test, Install, and Generate Fish Completions**:
    ```bash
    ./td_my_utility --help
    ./td_script_info td_my_utility
-   mkdir -p ~/.local/bin && install -m 755 td_* ~/.local/bin/
+   ./install.sh                # Installs scripts and auto-generates Fish completions
+   # Or manually update completions:
+   td_fish_completions
    ```
 
 ---
@@ -379,7 +381,41 @@ Time to full  : 23m 48s
 
 ---
 
-### 6. `td_template`
+### 6. `td_fish_completions`
+
+Dynamic Fish Shell completion generator and installer. Introspects Python `argparse` definitions across all `td_*` utilities, generates syntax-rich completion definitions with smart contextual suggestions (battery devices, directories, file completion, math expressions), and installs them directly to `~/.config/fish/completions/`.
+
+#### Features
+- **Dynamic Introspection**: Reads `build_parser()` directly from scripts—any new script created with `td_template` is automatically supported without writing Fish code!
+- **Context-Aware Suggestions**:
+  - Dynamically queries `/sys/class/power_supply/` for `-b / --battery` flags.
+  - Suggests directory paths for directory flags (`--dir`).
+  - Pre-populates common LaTeX formulas for `td_math2img`.
+  - Suggests valid choices for `--font`, `--format`, `--color`, etc.
+  - Suppresses file suggestions on numeric/text flags to keep the completion popup clean.
+- Automatically executed by `./install.sh` when Fish shell is installed.
+
+#### Usage
+```bash
+# Generate and install completions for all td_* scripts into ~/.config/fish/completions/
+td_fish_completions
+
+# Preview generated completions without writing to disk
+td_fish_completions --dry-run
+
+# Print Fish completion code for a specific command to stdout
+td_fish_completions --print td_battery_watch
+
+# List all discovered scripts and their parser status
+td_fish_completions --list
+
+# Install into a custom directory
+td_fish_completions --dir /path/to/custom/completions
+```
+
+---
+
+### 7. `td_template`
 
 Starter skeleton template for creating new `td_*` utilities. Includes built-in `argparse` setup, JSON output support, ANSI color management, standard input handling, and exit code handling.
 

@@ -44,6 +44,15 @@ echo "==> Installation complete!"
 echo "==> Installed scripts:"
 ls -1 "${INSTALL_DIR}"/td_* 2>/dev/null | xargs -n 1 basename | sed 's/^/    - /'
 
+# Automatically generate and install Fish shell completions if Fish is present
+if command -v fish >/dev/null 2>&1 || [[ -d "${HOME}/.config/fish" ]]; then
+    echo ""
+    echo "==> Generating and installing Fish shell completions..."
+    if [[ -x "${INSTALL_DIR}/td_fish_completions" ]]; then
+        "${INSTALL_DIR}/td_fish_completions" || true
+    fi
+fi
+
 if [[ ":$PATH:" != *":${INSTALL_DIR}:"* ]]; then
     echo ""
     echo "Notice: '${INSTALL_DIR}' is not currently in your PATH."

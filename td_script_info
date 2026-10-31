@@ -41,6 +41,12 @@ SCRIPTS = {
         "example": "td_script_info",
         "category": "Meta & Help",
     },
+    "td_fish_completions": {
+        "title": "Fish Shell Completions Generator",
+        "summary": "Dynamically inspect, generate, and install smart Fish shell completions for all td_* scripts.",
+        "example": "td_fish_completions",
+        "category": "Shell & Completion",
+    },
     "td_template": {
         "title": "Starter Skeleton Template",
         "summary": "Starter template with argparse, colors, JSON output, and error handling for creating new td_* scripts.",
