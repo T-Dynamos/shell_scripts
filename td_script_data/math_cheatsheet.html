@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LaTeX Math Cheat Sheet - td_math2img</title>
+  <!-- MathJax for rendering equations client-side -->
+  <script>
+    MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']]
+      },
+      svg: {
+        fontCache: 'global'
+      }
+    };
+  </script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --card-bg: #181b24;
+      --border: #2b3040;
+      --text: #e6edf3;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --code-bg: #1f2430;
+      --table-stripe: #141720;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f6f8fa;
+        --card-bg: #ffffff;
+        --border: #d0d7de;
+        --text: #1f2328;
+        --text-muted: #656d76;
+        --accent: #0969da;
+        --code-bg: #eff2f5;
+        --table-stripe: #f6f8fa;
+      }
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      padding: 20px;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    header {
+      margin-bottom: 25px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 15px;
+    }
+    header h1 {
+      font-size: 2rem;
+      margin-bottom: 6px;
+      color: var(--accent);
+    }
+    header p {
+      color: var(--text-muted);
+      font-size: 1rem;
+    }
+    .badge {
+      display: inline-block;
+      background: var(--accent);
+      color: #fff;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.8rem;
+      font-weight: bold;
+      vertical-align: middle;
+      margin-left: 8px;
+    }
+    .search-box {
+      margin-bottom: 25px;
+      position: sticky;
+      top: 10px;
+      z-index: 100;
+    }
+    .search-box input {
+      width: 100%;
+      padding: 12px 18px;
+      font-size: 1rem;
+      background: var(--card-bg);
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .search-box input:focus {
+      border-color: var(--accent);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(480px, 1fr));
+      gap: 20px;
+      margin-bottom: 25px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    }
+    .card h2 {
+      font-size: 1.25rem;
+      margin-bottom: 12px;
+      color: var(--accent);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 0.95rem;
+    }
+    th, td {
+      padding: 8px 12px;
+      text-align: left;
+      border: 1px solid var(--border);
+    }
+    th {
+      background: var(--code-bg);
+      color: var(--accent);
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background: var(--table-stripe);
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      background: var(--code-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.88rem;
+      cursor: pointer;
+      user-select: all;
+      transition: background 0.15s;
+    }
+    code:hover {
+      background: var(--accent);
+      color: #fff;
+    }
+    .math-cell {
+      font-size: 1.15rem;
+      min-width: 60px;
+      text-align: center;
+    }
+    .full-width {
+      grid-column: 1 / -1;
+    }
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      padding: 12px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 8px 0;
+    }
+    .tip-box {
+      background: rgba(88, 166, 255, 0.1);
+      border-left: 4px solid var(--accent);
+      padding: 12px 16px;
+      border-radius: 0 6px 6px 0;
+      margin-top: 15px;
+      font-size: 0.95rem;
+    }
+    footer {
+      text-align: center;
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>LaTeX Math Cheat Sheet <span class="badge">td_math2img</span></h1>
+      <p>Quick interactive syntax reference for writing math formulas. Click any code snippet to highlight/copy!</p>
+    </header>
+
+    <div class="search-box">
+      <input type="text" id="filterInput" placeholder="🔍 Search formula, command, symbol (e.g. fraction, alpha, integral, matrix)..." onkeyup="filterTables()">
+    </div>
+
+    <div class="grid">
+
+      <!-- 1. Math Mode & Basics -->
+      <div class="card">
+        <h2>1. Basic Syntax & Spacing</h2>
+        <table>
+          <thead><tr><th>Result</th><th>LaTeX</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td class="math-cell">\(a+b\)</td><td><code>a+b</code></td><td>Inline math</td></tr>
+            <tr><td class="math-cell">\(a \times b\)</td><td><code>a \times b</code></td><td>Multiplication</td></tr>
+            <tr><td class="math-cell">\(a \cdot b\)</td><td><code>a \cdot b</code></td><td>Dot product</td></tr>
+            <tr><td class="math-cell">\(a \div b\)</td><td><code>a \div b</code></td><td>Division</td></tr>
+            <tr><td class="math-cell">\(a\,b\)</td><td><code>a\,b</code></td><td>Thin space</td></tr>
+            <tr><td class="math-cell">\(a\;b\)</td><td><code>a\;b</code></td><td>Medium space</td></tr>
+            <tr><td class="math-cell">\(a\quad b\)</td><td><code>a\quad b</code></td><td>Quad space</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 2. Superscripts & Subscripts -->
+      <div class="card">
+        <h2>2. Powers & Subscripts</h2>
+        <table>
+          <thead><tr><th>Result</th><th>LaTeX</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td class="math-cell">\(x^2\)</td><td><code>x^2</code></td><td>Superscript</td></tr>
+            <tr><td class="math-cell">\(x^{10}\)</td><td><code>x^{10}</code></td><td>Group with braces</td></tr>
+            <tr><td class="math-cell">\(x_1\)</td><td><code>x_1</code></td><td>Subscript</td></tr>
+            <tr><td class="math-cell">\(x_{ij}\)</td><td><code>x_{ij}</code></td><td>Multi-index</td></tr>
+            <tr><td class="math-cell">\(x_i^2\)</td><td><code>x_i^2</code></td><td>Sub and super</td></tr>
+            <tr><td class="math-cell">\(x_i^{n+1}\)</td><td><code>x_i^{n+1}</code></td><td>Compound power</td></tr>
+            <tr><td class="math-cell">\(e^{-x}\)</td><td><code>e^{-x}</code></td><td>Exponential</td></tr>
+            <tr><td class="math-cell">\(2^{2^n}\)</td><td><code>2^{2^n}</code></td><td>Nested power</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 3. Fractions & Roots -->
+      <div class="card">
+        <h2>3. Fractions & Roots</h2>
+        <table>
+          <thead><tr><th>Result</th><th>LaTeX</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td class="math-cell">\(\frac{a}{b}\)</td><td><code>\frac{a}{b}</code></td><td>Fraction</td></tr>
+            <tr><td class="math-cell">\(\frac{x+1}{x-1}\)</td><td><code>\frac{x+1}{x-1}</code></td><td>Compound fraction</td></tr>
+            <tr><td class="math-cell">\(\sqrt{x}\)</td><td><code>\sqrt{x}</code></td><td>Square root</td></tr>
+            <tr><td class="math-cell">\(\sqrt[3]{x}\)</td><td><code>\sqrt[3]{x}</code></td><td>Cube root</td></tr>
+            <tr><td class="math-cell">\(\sqrt{x^2+y^2}\)</td><td><code>\sqrt{x^2+y^2}</code></td><td>Root of sum</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 4. Greek Letters -->
+      <div class="card full-width">
+        <h2>4. Greek Letters</h2>
+        <table>
+          <thead>
+            <tr><th>Symbol</th><th>Command</th><th>Symbol</th><th>Command</th><th>Uppercase</th><th>Command</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="math-cell">\(\alpha\)</td><td><code>\alpha</code></td><td class="math-cell">\(\beta\)</td><td><code>\beta</code></td><td class="math-cell">\(\Gamma\)</td><td><code>\Gamma</code></td></tr>
+            <tr><td class="math-cell">\(\gamma\)</td><td><code>\gamma</code></td><td class="math-cell">\(\delta\)</td><td><code>\delta</code></td><td class="math-cell">\(\Delta\)</td><td><code>\Delta</code></td></tr>
+            <tr><td class="math-cell">\(\epsilon\)</td><td><code>\epsilon</code></td><td class="math-cell">\(\varepsilon\)</td><td><code>\varepsilon</code></td><td class="math-cell">\(\Theta\)</td><td><code>\Theta</code></td></tr>
+            <tr><td class="math-cell">\(\zeta\)</td><td><code>\zeta</code></td><td class="math-cell">\(\eta\)</td><td><code>\eta</code></td><td class="math-cell">\(\Lambda\)</td><td><code>\Lambda</code></td></tr>
+            <tr><td class="math-cell">\(\theta\)</td><td><code>\theta</code></td><td class="math-cell">\(\vartheta\)</td><td><code>\vartheta</code></td><td class="math-cell">\(\Xi\)</td><td><code>\Xi</code></td></tr>
+            <tr><td class="math-cell">\(\iota\)</td><td><code>\iota</code></td><td class="math-cell">\(\kappa\)</td><td><code>\kappa</code></td><td class="math-cell">\(\Pi\)</td><td><code>\Pi</code></td></tr>
+            <tr><td class="math-cell">\(\lambda\)</td><td><code>\lambda</code></td><td class="math-cell">\(\mu\)</td><td><code>\mu</code></td><td class="math-cell">\(\Sigma\)</td><td><code>\Sigma</code></td></tr>
+            <tr><td class="math-cell">\(\nu\)</td><td><code>\nu</code></td><td class="math-cell">\(\xi\)</td><td><code>\xi</code></td><td class="math-cell">\(\Phi\)</td><td><code>\Phi</code></td></tr>
+            <tr><td class="math-cell">\(\pi\)</td><td><code>\pi</code></td><td class="math-cell">\(\varpi\)</td><td><code>\varpi</code></td><td class="math-cell">\(\Psi\)</td><td><code>\Psi</code></td></tr>
+            <tr><td class="math-cell">\(\rho\)</td><td><code>\rho</code></td><td class="math-cell">\(\sigma\)</td><td><code>\sigma</code></td><td class="math-cell">\(\Omega\)</td><td><code>\Omega</code></td></tr>
+            <tr><td class="math-cell">\(\tau\)</td><td><code>\tau</code></td><td class="math-cell">\(\phi\)</td><td><code>\phi</code></td><td class="math-cell">\(\varphi\)</td><td><code>\varphi</code></td></tr>
+            <tr><td class="math-cell">\(\chi\)</td><td><code>\chi</code></td><td class="math-cell">\(\psi\)</td><td><code>\psi</code></td><td class="math-cell">\(\omega\)</td><td><code>\omega</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 5. Operators, Relations, Arrows -->
+      <div class="card">
+        <h2>5. Operators & Relations</h2>
+        <table>
+          <thead><tr><th>Symbol</th><th>LaTeX</th><th>Symbol</th><th>LaTeX</th></tr></thead>
+          <tbody>
+            <tr><td class="math-cell">\(\pm\)</td><td><code>\pm</code></td><td class="math-cell">\(\mp\)</td><td><code>\mp</code></td></tr>
+            <tr><td class="math-cell">\(\leq\)</td><td><code>\leq</code></td><td class="math-cell">\(\geq\)</td><td><code>\geq</code></td></tr>
+            <tr><td class="math-cell">\(\neq\)</td><td><code>\neq</code></td><td class="math-cell">\(\approx\)</td><td><code>\approx</code></td></tr>
+            <tr><td class="math-cell">\(\equiv\)</td><td><code>\equiv</code></td><td class="math-cell">\(\sim\)</td><td><code>\sim</code></td></tr>
+            <tr><td class="math-cell">\(\infty\)</td><td><code>\infty</code></td><td class="math-cell">\(\propto\)</td><td><code>\propto</code></td></tr>
+            <tr><td class="math-cell">\(\nabla\)</td><td><code>\nabla</code></td><td class="math-cell">\(\partial\)</td><td><code>\partial</code></td></tr>
+            <tr><td class="math-cell">\(\perp\)</td><td><code>\perp</code></td><td class="math-cell">\(\parallel\)</td><td><code>\parallel</code></td></tr>
+            <tr><td class="math-cell">\(\forall\)</td><td><code>\forall</code></td><td class="math-cell">\(\exists\)</td><td><code>\exists</code></td></tr>
+            <tr><td class="math-cell">\(\rightarrow\)</td><td><code>\rightarrow</code></td><td class="math-cell">\(\Rightarrow\)</td><td><code>\Rightarrow</code></td></tr>
+            <tr><td class="math-cell">\(\leftrightarrow\)</td><td><code>\leftrightarrow</code></td><td class="math-cell">\(\Leftrightarrow\)</td><td><code>\Leftrightarrow</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 6. Brackets & Delimiters -->
+      <div class="card">
+        <h2>6. Brackets & Sizing</h2>
+        <table>
+          <thead><tr><th>Result</th><th>LaTeX</th><th>Usage</th></tr></thead>
+          <tbody>
+            <tr><td class="math-cell">\((x+y)\)</td><td><code>(x+y)</code></td><td>Parentheses</td></tr>
+            <tr><td class="math-cell">\([x+y]\)</td><td><code>[x+y]</code></td><td>Brackets</td></tr>
+            <tr><td class="math-cell">\( \{x+y\} \)</td><td><code>\{x+y\}</code></td><td>Curly braces (escaped)</td></tr>
+            <tr><td class="math-cell">\(|x|\)</td><td><code>|x|</code></td><td>Absolute value</td></tr>
+            <tr><td class="math-cell">\(\lVert x\rVert\)</td><td><code>\lVert x\rVert</code></td><td>Norm</td></tr>
+            <tr><td class="math-cell">\(\langle x,y\rangle\)</td><td><code>\langle x,y\rangle</code></td><td>Angle brackets</td></tr>
+            <tr><td class="math-cell">\(\left(\frac{a}{b}\right)\)</td><td><code>\left(\frac{a}{b}\right)</code></td><td>Auto-sizing parentheses</td></tr>
+            <tr><td class="math-cell">\(\left[\sum_{i=1}^n x_i\right]\)</td><td><code>\left[\sum_{i=1}^n x_i\right]</code></td><td>Auto-sizing brackets</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 7. Sums, Limits, Integrals -->
+      <div class="card full-width">
+        <h2>7. Sums, Integrals & Calculus</h2>
+        <table>
+          <thead><tr><th>Expression</th><th>LaTeX</th><th>Concept</th></tr></thead>
+          <tbody>
+            <tr><td class="math-cell">\(\sum_{i=1}^{n} i\)</td><td><code>\sum_{i=1}^{n} i</code></td><td>Summation</td></tr>
+            <tr><td class="math-cell">\(\prod_{i=1}^{n} i\)</td><td><code>\prod_{i=1}^{n} i</code></td><td>Product</td></tr>
+            <tr><td class="math-cell">\(\lim_{x\to 0} f(x)\)</td><td><code>\lim_{x\to 0} f(x)</code></td><td>Limit</td></tr>
+            <tr><td class="math-cell">\(\int_a^b f(x)\,dx\)</td><td><code>\int_a^b f(x)\,dx</code></td><td>Definite integral</td></tr>
+            <tr><td class="math-cell">\(\iint_D f(x,y)\,dA\)</td><td><code>\iint_D f(x,y)\,dA</code></td><td>Double integral</td></tr>
+            <tr><td class="math-cell">\(\oint_C F\cdot dr\)</td><td><code>\oint_C F\cdot dr</code></td><td>Contour integral</td></tr>
+            <tr><td class="math-cell">\(\frac{dy}{dx}\)</td><td><code>\frac{dy}{dx}</code></td><td>First derivative</td></tr>
+            <tr><td class="math-cell">\(\frac{d^2y}{dx^2}\)</td><td><code>\frac{d^2y}{dx^2}</code></td><td>Second derivative</td></tr>
+            <tr><td class="math-cell">\(\frac{\partial f}{\partial x}\)</td><td><code>\frac{\partial f}{\partial x}</code></td><td>Partial derivative</td></tr>
+            <tr><td class="math-cell">\(\nabla f\)</td><td><code>\nabla f</code></td><td>Gradient</td></tr>
+            <tr><td class="math-cell">\(\nabla^2 f\)</td><td><code>\nabla^2 f</code></td><td>Laplacian</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 8. Sets, Logic, Accents -->
+      <div class="card">
+        <h2>8. Sets, Logic & Number Sets</h2>
+        <table>
+          <thead><tr><th>Symbol</th><th>LaTeX</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td class="math-cell">\(x \in A\)</td><td><code>x \in A</code></td><td>Element of</td></tr>
+            <tr><td class="math-cell">\(x \notin A\)</td><td><code>x \notin A</code></td><td>Not element of</td></tr>
+            <tr><td class="math-cell">\(A \subset B\)</td><td><code>A \subset B</code></td><td>Subset</td></tr>
+            <tr><td class="math-cell">\(A \cup B\)</td><td><code>A \cup B</code></td><td>Union</td></tr>
+            <tr><td class="math-cell">\(A \cap B\)</td><td><code>A \cap B</code></td><td>Intersection</td></tr>
+            <tr><td class="math-cell">\(\varnothing\)</td><td><code>\varnothing</code></td><td>Empty set</td></tr>
+            <tr><td class="math-cell">\(\mathbb{R}\)</td><td><code>\mathbb{R}</code></td><td>Real numbers</td></tr>
+            <tr><td class="math-cell">\(\mathbb{Z}, \mathbb{N}, \mathbb{C}\)</td><td><code>\mathbb{Z}, \mathbb{N}, \mathbb{C}</code></td><td>Integers, Naturals, Complex</td></tr>
+            <tr><td class="math-cell">\(P \implies Q\)</td><td><code>P \implies Q</code></td><td>Implication</td></tr>
+            <tr><td class="math-cell">\(P \iff Q\)</td><td><code>P \iff Q</code></td><td>Equivalence</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 9. Vectors & Accents -->
+      <div class="card">
+        <h2>9. Vectors & Accents</h2>
+        <table>
+          <thead><tr><th>Result</th><th>LaTeX</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td class="math-cell">\(\vec{v}\)</td><td><code>\vec{v}</code></td><td>Vector arrow</td></tr>
+            <tr><td class="math-cell">\(\mathbf{v}\)</td><td><code>\mathbf{v}</code></td><td>Bold vector</td></tr>
+            <tr><td class="math-cell">\(\hat{x}\)</td><td><code>\hat{x}</code></td><td>Unit vector / Hat</td></tr>
+            <tr><td class="math-cell">\(\bar{x}\)</td><td><code>\bar{x}</code></td><td>Mean / Bar</td></tr>
+            <tr><td class="math-cell">\(\dot{x}\)</td><td><code>\dot{x}</code></td><td>First time derivative</td></tr>
+            <tr><td class="math-cell">\(\ddot{x}\)</td><td><code>\ddot{x}</code></td><td>Second time derivative</td></tr>
+            <tr><td class="math-cell">\(\tilde{x}\)</td><td><code>\tilde{x}</code></td><td>Tilde accent</td></tr>
+            <tr><td class="math-cell">\(\overline{AB}\)</td><td><code>\overline{AB}</code></td><td>Overline segment</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 10. Complete Iconic Equations -->
+      <div class="card full-width">
+        <h2>10. Iconic Formula Examples</h2>
+        <table>
+          <thead><tr><th>Name</th><th>Rendered</th><th>LaTeX Command for td_math2img</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><b>Quadratic Formula</b></td>
+              <td class="math-cell">\(x = \frac{-b \pm \sqrt{b^2-4ac}}{2a}\)</td>
+              <td><code>td_math2img '\frac{-b \pm \sqrt{b^2-4ac}}{2a}'</code></td>
+            </tr>
+            <tr>
+              <td><b>Euler's Identity</b></td>
+              <td class="math-cell">\(e^{i\pi} + 1 = 0\)</td>
+              <td><code>td_math2img 'e^{i\pi} + 1 = 0'</code></td>
+            </tr>
+            <tr>
+              <td><b>Gaussian Integral</b></td>
+              <td class="math-cell">\(\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}\)</td>
+              <td><code>td_math2img '\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}'</code></td>
+            </tr>
+            <tr>
+              <td><b>Pythagorean Theorem</b></td>
+              <td class="math-cell">\(a^2 + b^2 = c^2\)</td>
+              <td><code>td_math2img 'a^2 + b^2 = c^2'</code></td>
+            </tr>
+            <tr>
+              <td><b>Binomial Theorem</b></td>
+              <td class="math-cell">\((a+b)^n = \sum_{k=0}^n \binom{n}{k} a^{n-k} b^k\)</td>
+              <td><code>td_math2img '(a+b)^n = \sum_{k=0}^n \binom{n}{k} a^{n-k} b^k'</code></td>
+            </tr>
+            <tr>
+              <td><b>Taylor Series</b></td>
+              <td class="math-cell">\(f(x) = \sum_{n=0}^\infty \frac{f^{(n)}(a)}{n!}(x-a)^n\)</td>
+              <td><code>td_math2img 'f(x) = \sum_{n=0}^\infty \frac{f^{(n)}(a)}{n!}(x-a)^n'</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+
+    <div class="tip-box">
+      <b>💡 Quick Tips for td_math2img:</b>
+      <ul style="margin-left: 20px; margin-top: 5px;">
+        <li>Outer delimiters like <code>$...$</code> or <code>$$...$$</code> are optional; <code>td_math2img</code> handles them automatically.</li>
+        <li>Use <code>--save formula.png</code> or <code>--save formula.svg</code> to save to a specific file path.</li>
+        <li>Use <code>-s</code> or <code>--show</code> to open the rendered image directly in <code>swayimg</code>.</li>
+        <li>Use <code>-t</code> for transparent background, or <code>-d</code> for dark theme.</li>
+      </ul>
+    </div>
+
+    <footer>
+      T-Dynamos Shell Scripts &bull; Created with <b>td_math2img</b>
+    </footer>
+  </div>
+
+  <script>
+    function filterTables() {
+      const q = document.getElementById("filterInput").value.toLowerCase();
+      const rows = document.querySelectorAll("tbody tr");
+      rows.forEach(r => {
+        const text = r.innerText.toLowerCase();
+        r.style.display = text.includes(q) ? "" : "none";
+      });
+    }
+
+    // Click to copy code
+    document.querySelectorAll("code").forEach(el => {
+      el.title = "Click to copy";
+      el.addEventListener("click", () => {
+        navigator.clipboard.writeText(el.innerText);
+        const orig = el.innerText;
+        el.innerText = "✓ Copied!";
+        setTimeout(() => { el.innerText = orig; }, 1200);
+      });
+    });
+  </script>
+</body>
+</html>

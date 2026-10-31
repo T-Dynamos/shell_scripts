@@ -56,10 +56,10 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ### 1. Truly One-Line Remote Install / Update Command (via Git)
 
-You can run this anywhere without manually cloning or keeping a local repository. It clones to a temporary directory, installs/updates all `td_*` executables into `~/.local/bin`, and immediately cleans up:
+You can run this anywhere without manually cloning or keeping a local repository. It clones to a temporary directory, installs/updates all `td_*` executables and data into `~/.local/bin`, and immediately cleans up:
 
 ```bash
-tmp=$(mktemp -d) && git clone --depth 1 https://github.com/T-Dynamos/shell_scripts.git "$tmp" && mkdir -p ~/.local/bin && install -m 755 -v "$tmp"/td_* ~/.local/bin/ && rm -rf "$tmp"
+tmp=$(mktemp -d) && git clone --depth 1 https://github.com/T-Dynamos/shell_scripts.git "$tmp" && "$tmp"/install.sh && rm -rf "$tmp"
 ```
 
 ### 2. One-Line Remote Install (via Curl)
@@ -182,6 +182,7 @@ Renders LaTeX math formulas directly to high-resolution images (PNG, SVG, etc.),
 - Accepts expressions as CLI arguments or piped from `stdin`.
 - Automatically strips outer `$...$`, `$$...$$`, `\[...\]`, or `\displaystyle`.
 - Directly saves output via `--save {imgpath}` or `-o {imgpath}` (supports `.png`, `.svg`, etc.).
+- Built-in interactive LaTeX math cheat sheet via `--cheatsheet` (opens in default browser).
 - Copies the image to the Wayland clipboard (`image/png`, `image/svg+xml`) via a detached `wl-copy` session.
 - Seamless preview in `swayimg` (foreground or detached background).
 - Supports transparent backgrounds (`-t`), dark theme preset (`-d`), custom colors, DPI, and font sizes.
@@ -191,6 +192,9 @@ Renders LaTeX math formulas directly to high-resolution images (PNG, SVG, etc.),
 ```bash
 # Render and copy quadratic formula to clipboard
 td_math2img '\frac{-b \pm \sqrt{b^2-4ac}}{2a}'
+
+# Open interactive LaTeX Math Cheat Sheet in browser
+td_math2img --cheatsheet
 
 # Save image to a specific path using --save
 td_math2img --save formula.png '\frac{-b \pm \sqrt{b^2-4ac}}{2a}'
@@ -233,6 +237,7 @@ echo '\alpha^2 + \beta^2 = \gamma^2' | td_math2img -s
 | `--size, --fontsize SIZE` | Font size in points (default: `24`). |
 | `--pad PAD` | Padding in pixels around formula (default: `16`). |
 | `--font FONT` | Math font set: `cm` (default), `dejavusans`, `dejavuserif`, `stix`, `stixsans`. |
+| `--cheatsheet, --cheatsheat` | Open the interactive LaTeX math cheat sheet in your default web browser. |
 | `-q, --quiet` | Suppress status output. |
 
 ---

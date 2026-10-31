@@ -11,7 +11,16 @@ mkdir -p "${INSTALL_DIR}"
 # If already inside the repo directory, install directly from working copy
 if [[ -f "./td_script_info" && -f "./td_math2img" ]]; then
     echo "==> Installing directly from local repository..."
-    install -m 755 -v td_* "${INSTALL_DIR}/"
+    for f in ./td_*; do
+        if [[ -f "$f" ]]; then
+            install -m 755 -v "$f" "${INSTALL_DIR}/"
+        fi
+    done
+    if [[ -d "./td_script_data" ]]; then
+        echo "==> Installing td_script_data..."
+        rm -rf "${INSTALL_DIR}/td_script_data"
+        cp -r "./td_script_data" "${INSTALL_DIR}/"
+    fi
 else
     # Otherwise clone to an isolated temporary directory
     TMP_DIR="$(mktemp -d)"
@@ -19,7 +28,16 @@ else
 
     echo "==> Fetching latest scripts from GitHub..."
     git clone --depth 1 "${REPO_URL}" "${TMP_DIR}" >/dev/null 2>&1
-    install -m 755 -v "${TMP_DIR}"/td_* "${INSTALL_DIR}/"
+    for f in "${TMP_DIR}"/td_*; do
+        if [[ -f "$f" ]]; then
+            install -m 755 -v "$f" "${INSTALL_DIR}/"
+        fi
+    done
+    if [[ -d "${TMP_DIR}/td_script_data" ]]; then
+        echo "==> Installing td_script_data..."
+        rm -rf "${INSTALL_DIR}/td_script_data"
+        cp -r "${TMP_DIR}/td_script_data" "${INSTALL_DIR}/"
+    fi
 fi
 
 echo "==> Installation complete!"

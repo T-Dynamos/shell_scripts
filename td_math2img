@@ -216,6 +216,46 @@ def view_in_swayimg(
         return False
 
 
+def find_cheatsheet_path() -> str | None:
+    """Locate the math_cheatsheet.html file in data directory or bin paths."""
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    candidates = [
+        os.path.join(script_dir, "td_script_data", "math_cheatsheet.html"),
+        os.path.join(script_dir, "..", "td_script_data", "math_cheatsheet.html"),
+        os.path.expanduser("~/.local/bin/td_script_data/math_cheatsheet.html"),
+        "/home/tdynamos/shell_scripts/td_script_data/math_cheatsheet.html",
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return os.path.abspath(c)
+    return None
+
+
+def open_cheatsheet(quiet: bool = False) -> int:
+    """Open the LaTeX math cheatsheet in the user's default browser."""
+    path = find_cheatsheet_path()
+    if not path:
+        sys.stderr.write(
+            "Error: Could not locate 'td_script_data/math_cheatsheet.html'.\n"
+            "Ensure td_script_data is installed alongside the script.\n"
+        )
+        return 1
+
+    import webbrowser
+    file_url = f"file://{path}"
+    if not quiet:
+        print(f"Opening LaTeX Math Cheat Sheet in default browser:\n  {file_url}")
+
+    try:
+        opened = webbrowser.open(file_url)
+        if not opened and shutil.which("xdg-open"):
+            subprocess.run(["xdg-open", path], check=False)
+        return 0
+    except Exception as e:
+        sys.stderr.write(f"Error opening browser: {e}\n")
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="td_math2img",
@@ -335,6 +375,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Math font set (default: 'cm' - Computer Modern / classic LaTeX).",
     )
 
+    # Documentation / Cheatsheet
+    parser.add_argument(
+        "--cheatsheet",
+        "--cheatsheat",
+        action="store_true",
+        help="Open interactive LaTeX math cheat sheet in your default web browser.",
+    )
+
     # General
     parser.add_argument(
         "-q",
@@ -349,6 +397,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+
+    # Launch cheatsheet if requested
+    if args.cheatsheet:
+        return open_cheatsheet(quiet=args.quiet)
 
     # Determine input expression
     raw_input = ""
