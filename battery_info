@@ -1,0 +1,35 @@
+#!/usr/bin/python3
+
+from os.path import join
+
+battery_class = "/sys/class/power_supply/BAT0/"
+
+charge_full_design = join(battery_class, "charge_full_design")
+charge_full = join(battery_class, "charge_full")
+
+def read_data(file):
+    data = 0
+
+    with open(file, "r") as _f:
+        data = int(_f.read())
+
+    return data
+
+cfd = read_data(charge_full_design)
+cf = read_data(charge_full)
+
+print(f"Health: {(cf/cfd)*100:.2f}%")
+
+print(f"Capacity: {cf * 1e-3:.0f}/{cfd * 1e-3:.0f} mAh")
+
+# estimate charge current
+
+# assuming max charge current is related to charge_full
+
+const = 80
+
+# 99% of 80 (accounts for errors)
+const *= 0.998
+
+cc = cf * const * (1e-8)
+print(f"CC phase estimate: {cc:.2f}A")

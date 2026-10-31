@@ -1,0 +1,420 @@
+#!/usr/bin/env python3
+"""
+math2png - Render LaTeX math expressions to high-resolution PNG images,
+copy them to the Wayland clipboard via wl-copy, and optionally view them in swayimg.
+"""
+
+import sys
+import os
+import re
+import shlex
+import shutil
+import argparse
+import tempfile
+import subprocess
+from datetime import datetime
+
+try:
+    import matplotlib as mpl
+    import matplotlib.pyplot as plt
+    from matplotlib.mathtext import MathTextParser
+    from matplotlib import figure
+    import matplotlib.font_manager as fm
+except ImportError:
+    sys.stderr.write(
+        "Error: matplotlib is required to render math expressions.\n"
+        "Please install it using: pacman -S python-matplotlib  or  pip install matplotlib\n"
+    )
+    sys.exit(1)
+
+
+def normalize_expression(expr: str) -> str:
+    """Strip extraneous delimiters like $$, $, \\[, \\], \\displaystyle, etc."""
+    expr = expr.strip()
+    # Strip enclosing $$ ... $$ or $ ... $
+    if expr.startswith("$$") and expr.endswith("$$") and len(expr) >= 4:
+        expr = expr[2:-2].strip()
+    elif expr.startswith("$") and expr.endswith("$") and len(expr) >= 2:
+        expr = expr[1:-1].strip()
+    # Strip enclosing \[ ... \] or \( ... \)
+    elif expr.startswith(r"\[") and expr.endswith(r"\]") and len(expr) >= 4:
+        expr = expr[2:-2].strip()
+    elif expr.startswith(r"\(") and expr.endswith(r"\)") and len(expr) >= 4:
+        expr = expr[2:-2].strip()
+
+    # Strip \\displaystyle or \\textstyle prefixes
+    expr = re.sub(r"^\\(?:display|text)style\s*", "", expr)
+    return expr
+
+
+def render_math_to_png(
+    lines: list[str],
+    out_path: str,
+    dpi: int = 300,
+    fontsize: float = 24.0,
+    fg_color: str = "black",
+    bg_color: str = "white",
+    is_transparent: bool = False,
+    pad_px: int = 16,
+    fontset: str = "cm",
+) -> None:
+    """Render one or more lines of LaTeX math into a cropped, padded PNG."""
+    plt.rcParams.update({
+        "mathtext.fontset": fontset,
+        "font.family": "serif",
+    })
+
+    parser = MathTextParser("path")
+    prop = fm.FontProperties(size=fontsize)
+
+    parsed = []
+    for line in lines:
+        cleaned = normalize_expression(line)
+        if not cleaned:
+            continue
+        math_str = f"${cleaned}$"
+        try:
+            w, h, d, _, _ = parser.parse(math_str, dpi=72, prop=prop)
+            parsed.append((math_str, w, h, d))
+        except Exception as e:
+            raise ValueError(f"Failed to parse LaTeX expression '{line}': {e}") from e
+
+    if not parsed:
+        raise ValueError("No valid math expression to render.")
+
+    # Inter-line spacing for multi-line expressions
+    line_gap_pt = fontsize * 0.45 if len(parsed) > 1 else 0.0
+    content_width_pt = max(w for _, w, _, _ in parsed)
+    content_height_pt = sum(h for _, _, h, _ in parsed) + (len(parsed) - 1) * line_gap_pt
+
+    pad_in = pad_px / dpi
+    fig_w = (content_width_pt / 72.0) + 2 * pad_in
+    fig_h = (content_height_pt / 72.0) + 2 * pad_in
+
+    fig = figure.Figure(figsize=(fig_w, fig_h), dpi=dpi)
+
+    if is_transparent or bg_color.lower() == "transparent":
+        fig.patch.set_alpha(0.0)
+    else:
+        fig.patch.set_facecolor(bg_color)
+        fig.patch.set_alpha(1.0)
+
+    # Position each line vertically from top to bottom
+    cur_y_pt = content_height_pt
+    for math_str, w, h, d in parsed:
+        cur_y_pt -= h
+        baseline_in = pad_in + (cur_y_pt + d) / 72.0
+        # Horizontally center the expression
+        x_in = pad_in + (content_width_pt - w) / (2.0 * 72.0)
+
+        fig.text(
+            x_in / fig_w,
+            baseline_in / fig_h,
+            math_str,
+            fontproperties=prop,
+            color=fg_color,
+        )
+        cur_y_pt -= line_gap_pt
+
+    # Ensure target directory exists
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+
+    fig.savefig(
+        out_path,
+        dpi=dpi,
+        transparent=(is_transparent or bg_color.lower() == "transparent"),
+        facecolor=fig.get_facecolor(),
+        edgecolor="none",
+    )
+
+
+def copy_with_wl_copy(png_path: str, primary: bool = False, quiet: bool = False) -> bool:
+    """Copy the rendered PNG to the Wayland clipboard using wl-copy."""
+    wl_copy_bin = shutil.which("wl-copy")
+    if not wl_copy_bin:
+        if not quiet:
+            sys.stderr.write("Warning: 'wl-copy' not found. Clipboard copy skipped.\n")
+        return False
+
+    cmd = [wl_copy_bin, "-t", "image/png"]
+    if primary:
+        cmd.append("-p")
+
+    try:
+        with open(png_path, "rb") as f:
+            png_bytes = f.read()
+
+        # Detach in its own session so wl-copy stays alive as a daemon to serve paste requests
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            start_new_session=True,
+        )
+        proc.communicate(input=png_bytes)
+
+        if proc.returncode != 0:
+            if not quiet:
+                sys.stderr.write(f"Warning: wl-copy returned exit code {proc.returncode}.\n")
+            return False
+
+        if not quiet:
+            target = "primary selection" if primary else "clipboard"
+            print(f"Copied image to Wayland {target} via wl-copy.")
+        return True
+    except Exception as e:
+        if not quiet:
+            sys.stderr.write(f"Warning: Failed to copy to clipboard: {e}\n")
+        return False
+
+
+def view_in_swayimg(
+    png_path: str,
+    extra_args: list[str] | None = None,
+    detach: bool = False,
+    quiet: bool = False,
+) -> bool:
+    """Open the rendered PNG image using swayimg."""
+    swayimg_bin = shutil.which("swayimg")
+    if not swayimg_bin:
+        sys.stderr.write("Error: 'swayimg' executable not found in PATH.\n")
+        return False
+
+    cmd = [swayimg_bin]
+    if extra_args:
+        cmd.extend(extra_args)
+    cmd.append(png_path)
+
+    try:
+        if detach:
+            subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                env=os.environ.copy(),
+            )
+            if not quiet:
+                print("Opened in swayimg (background process spawned).")
+        else:
+            if not quiet:
+                print("Opening image in swayimg...")
+            subprocess.run(cmd, env=os.environ.copy())
+        return True
+    except Exception as e:
+        sys.stderr.write(f"Error launching swayimg: {e}\n")
+        return False
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="math2png",
+        description="Render a LaTeX math expression to PNG, copy to clipboard with wl-copy, and view with swayimg.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  %(prog)s '\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}'
+  %(prog)s '\\int_0^\\infty e^{-x} dx = 1' --show
+  %(prog)s -s -t '\\sum_{k=1}^n k = \\frac{n(n+1)}{2}'
+  %(prog)s -d -s '\\mathbf{F} = m \\mathbf{a}'
+  %(prog)s -o formula.png '\\lim_{x \\to 0} \\frac{\\sin x}{x} = 1'
+  echo '\\alpha^2 + \\beta^2 = \\gamma^2' | %(prog)s --show
+""",
+    )
+
+    parser.add_argument(
+        "expression",
+        nargs="*",
+        help="LaTeX math formula (e.g. '\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}'). Reads from stdin if omitted or '-'.",
+    )
+
+    # Output options
+    parser.add_argument(
+        "-o",
+        "--output",
+        metavar="FILE",
+        help="Save PNG to specified path (default: timestamped temp file in /tmp).",
+    )
+
+    # Viewer options
+    parser.add_argument(
+        "-s",
+        "--show",
+        "--view",
+        action="store_true",
+        help="Open the rendered image in swayimg.",
+    )
+    parser.add_argument(
+        "--detach",
+        action="store_true",
+        help="Launch swayimg in the background instead of waiting for it to exit.",
+    )
+    parser.add_argument(
+        "--swayimg-args",
+        metavar="ARGS",
+        help="Extra flags to pass directly to swayimg (e.g. '--swayimg-args=\"-S 600,400\"').",
+    )
+
+    # Clipboard options
+    parser.add_argument(
+        "-n",
+        "--no-copy",
+        action="store_true",
+        help="Do not copy the image to the clipboard.",
+    )
+    parser.add_argument(
+        "-p",
+        "--primary",
+        action="store_true",
+        help="Copy to the Wayland primary selection instead of the regular clipboard.",
+    )
+
+    # Style and appearance
+    parser.add_argument(
+        "-t",
+        "--transparent",
+        action="store_true",
+        help="Make the image background transparent.",
+    )
+    parser.add_argument(
+        "-d",
+        "--dark",
+        action="store_true",
+        help="Dark theme preset: white text on dark background (#181825), or transparent if -t is set.",
+    )
+    parser.add_argument(
+        "--bg",
+        "--background",
+        dest="background",
+        metavar="COLOR",
+        help="Background color (e.g. 'white', 'black', 'transparent', '#1e1e2e').",
+    )
+    parser.add_argument(
+        "--fg",
+        "--color",
+        dest="color",
+        metavar="COLOR",
+        help="Formula text color (e.g. 'black', 'white', '#89b4fa').",
+    )
+    parser.add_argument(
+        "--dpi",
+        type=int,
+        default=300,
+        help="Resolution in DPI (default: 300).",
+    )
+    parser.add_argument(
+        "--size",
+        "--fontsize",
+        dest="fontsize",
+        type=float,
+        default=24.0,
+        help="Font size in points (default: 24).",
+    )
+    parser.add_argument(
+        "--pad",
+        type=int,
+        default=16,
+        help="Padding around formula in pixels (default: 16).",
+    )
+    parser.add_argument(
+        "--font",
+        choices=["cm", "dejavusans", "dejavuserif", "stix", "stixsans"],
+        default="cm",
+        help="Math font set (default: 'cm' - Computer Modern / classic LaTeX).",
+    )
+
+    # General
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Suppress informational console output.",
+    )
+
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    # Determine input expression
+    raw_input = ""
+    if args.expression and args.expression != ["-"]:
+        raw_input = " ".join(args.expression)
+    else:
+        # Check if input is piped through stdin
+        if not sys.stdin.isatty() or (args.expression and args.expression == ["-"]):
+            raw_input = sys.stdin.read().strip()
+        else:
+            parser.print_help(sys.stderr)
+            return 1
+
+    if not raw_input.strip():
+        sys.stderr.write("Error: No math expression provided.\n")
+        return 1
+
+    lines = [line.strip() for line in raw_input.splitlines() if line.strip()]
+    if not lines:
+        sys.stderr.write("Error: Empty math expression.\n")
+        return 1
+
+    # Resolve colors based on flags
+    is_transparent = args.transparent
+    fg_color = args.color
+    bg_color = args.background
+
+    if args.dark:
+        if fg_color is None:
+            fg_color = "white"
+        if bg_color is None:
+            bg_color = "transparent" if is_transparent else "#181825"
+    else:
+        if fg_color is None:
+            fg_color = "black"
+        if bg_color is None:
+            bg_color = "transparent" if is_transparent else "white"
+
+    if bg_color.lower() == "transparent":
+        is_transparent = True
+
+    # Determine output file path
+    if args.output:
+        out_path = os.path.abspath(args.output)
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = os.path.join(tempfile.gettempdir(), f"math_{timestamp}.png")
+
+    # Render image
+    try:
+        render_math_to_png(
+            lines=lines,
+            out_path=out_path,
+            dpi=args.dpi,
+            fontsize=args.fontsize,
+            fg_color=fg_color,
+            bg_color=bg_color,
+            is_transparent=is_transparent,
+            pad_px=args.pad,
+            fontset=args.font,
+        )
+    except Exception as e:
+        sys.stderr.write(f"Render Error: {e}\n")
+        return 1
+
+    if not args.quiet:
+        print(f"Rendered: {out_path}")
+
+    # Copy to clipboard
+    if not args.no_copy:
+        copy_with_wl_copy(out_path, primary=args.primary, quiet=args.quiet)
+
+    # Open in swayimg if requested
+    if args.show:
+        extra_args = shlex.split(args.swayimg_args) if args.swayimg_args else []
+        view_in_swayimg(out_path, extra_args=extra_args, detach=args.detach, quiet=args.quiet)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
