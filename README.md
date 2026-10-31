@@ -54,15 +54,31 @@ Ensure `~/.local/bin` is in your `$PATH` (e.g. in `~/.bashrc`, `~/.zshrc`, or `~
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-### One-line command to install or update in `~/.local/bin`
+### 1. Truly One-Line Remote Install / Update Command (via Git)
 
-Run this single command from within the cloned repository to install or update all `td_*` scripts into `~/.local/bin`:
+You can run this anywhere without manually cloning or keeping a local repository. It clones to a temporary directory, installs/updates all `td_*` executables into `~/.local/bin`, and immediately cleans up:
+
+```bash
+tmp=$(mktemp -d) && git clone --depth 1 https://github.com/T-Dynamos/shell_scripts.git "$tmp" && mkdir -p ~/.local/bin && install -m 755 -v "$tmp"/td_* ~/.local/bin/ && rm -rf "$tmp"
+```
+
+### 2. One-Line Remote Install (via Curl)
+
+Alternatively, execute the bundled installer script directly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/T-Dynamos/shell_scripts/main/install.sh | bash
+```
+
+### 3. If Cloned Locally
+
+If you have cloned the repository locally:
 
 ```bash
 mkdir -p ~/.local/bin && install -m 755 -v td_* ~/.local/bin/
 ```
 
-> **Tip (Symlink install)**: If you develop or pull git changes frequently, you can symlink them so updates reflect immediately without re-copying:
+> **Tip (Symlink install)**: If you develop scripts or `git pull` frequently, you can symlink them so updates take effect immediately:
 > ```bash
 > mkdir -p ~/.local/bin && ln -sf "$PWD"/td_* ~/.local/bin/
 > ```
@@ -81,6 +97,58 @@ Or for a compact table:
 ```bash
 td_script_info --compact
 ```
+
+---
+
+## How to Add a New Script
+
+All scripts in this repository follow standard conventions to maintain consistency, reliability, and ease of maintenance. A starter skeleton script is provided: [`td_template`](td_template).
+
+### Step-by-Step Guide
+
+1. **Name your script**:
+   Every script must start with the `td_` prefix (e.g. `td_my_utility`).
+
+2. **Copy the starter template**:
+   ```bash
+   cp td_template td_my_utility
+   ```
+
+3. **Follow the standard template conventions**:
+   - Use `#!/usr/bin/env python3` (or `#!/usr/bin/env bash` with `set -euo pipefail`).
+   - Implement command-line flags with `argparse`.
+   - Support standard flags where applicable:
+     - `-j, --json` for machine-readable JSON output.
+     - `-v, --verbose` and `-q, --quiet`.
+     - `--no-color` (respect terminal TTY color detection: `sys.stdout.isatty()`).
+   - Accept input from both command-line arguments and `stdin` when applicable.
+   - Return appropriate exit codes (`0` on success, non-zero on failure).
+
+4. **Make the script executable**:
+   ```bash
+   chmod +x td_my_utility
+   ```
+
+5. **Register in `td_script_info`**:
+   Add an entry to the `SCRIPTS` dictionary in [`td_script_info`](td_script_info):
+   ```python
+   "td_my_utility": {
+       "title": "Short Descriptive Title",
+       "summary": "One-line summary of what the script does.",
+       "example": "td_my_utility --option 'example argument'",
+       "category": "Category Name",
+   },
+   ```
+
+6. **Document in `README.md`**:
+   Add a section under **Included Scripts** documenting features, options, and usage examples.
+
+7. **Test and Install**:
+   ```bash
+   ./td_my_utility --help
+   ./td_script_info td_my_utility
+   mkdir -p ~/.local/bin && install -m 755 td_* ~/.local/bin/
+   ```
 
 ---
 
@@ -199,15 +267,6 @@ td_battery_info -v
 td_battery_info -b BAT0
 ```
 
-#### Example Output
-```text
---- Battery Information (BAT0) ---
-Health           : 78.23%
-Capacity         : 1721/2200 mAh
-Status           : Full
-CC phase estimate: 1.37A
-```
-
 ---
 
 ### 4. `td_battery_watch`
@@ -240,13 +299,19 @@ td_battery_watch --once --json
 td_battery_watch --no-clear
 ```
 
-#### Example Output
-```text
-Battery       : BAT0
-Status        : Full
-Charge        : 100.00% [███████████████] (1721/1721 mAh)
-Current       : 1.00 mA (~0.02 W)
-Time          : Full (charged)
+---
+
+### 5. `td_template`
+
+Starter skeleton template for creating new `td_*` utilities. Includes built-in `argparse` setup, JSON output support, ANSI color management, standard input handling, and exit code handling.
+
+```bash
+# View template CLI options
+td_template --help
+
+# Test execution
+td_template "Sample test input"
+td_template "Sample test input" --json
 ```
 
 ---

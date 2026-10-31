@@ -35,6 +35,12 @@ SCRIPTS = {
         "example": "td_script_info",
         "category": "Meta & Help",
     },
+    "td_template": {
+        "title": "Starter Skeleton Template",
+        "summary": "Starter template with argparse, colors, JSON output, and error handling for creating new td_* scripts.",
+        "example": "td_template 'hello world' --json",
+        "category": "Meta & Template",
+    },
 }
 
 

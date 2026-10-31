@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""
+td_template - Starter skeleton template for creating new T-Dynamos (td_*) scripts.
+Part of T-Dynamos shell_scripts.
+
+Instructions for adding a new script:
+1. Copy this file: cp td_template td_<your_script_name>
+2. Update the docstring, author info, and build_parser() arguments.
+3. Implement your core logic inside run() or helper functions.
+4. Make executable: chmod +x td_<your_script_name>
+5. Register in td_script_info (SCRIPTS dict) and README.md.
+"""
+
+import sys
+import os
+import json
+import argparse
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Configure command-line argument parser."""
+    parser = argparse.ArgumentParser(
+        prog="td_template",
+        description="A clean template skeleton for creating new td_* command-line utilities.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  %(prog)s "hello world"
+  %(prog)s "sample text" --json
+  %(prog)s "sample text" --verbose
+  echo "streamed text" | %(prog)s
+""",
+    )
+
+    # Positional argument(s)
+    parser.add_argument(
+        "input_text",
+        nargs="*",
+        help="Input text or arguments. Reads from stdin if omitted or '-'.",
+    )
+
+    # Common utility flags
+    parser.add_argument(
+        "-o",
+        "--output",
+        metavar="FILE",
+        help="Write output to a specified file instead of stdout.",
+    )
+    parser.add_argument(
+        "-j",
+        "--json",
+        action="store_true",
+        help="Format output as JSON.",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Display detailed execution information.",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Suppress non-essential console output.",
+    )
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable ANSI terminal colors.",
+    )
+
+    return parser
+
+
+def process_data(text: str, verbose: bool = False) -> dict:
+    """Core logic implementation placeholder. Replace with your actual task logic."""
+    if verbose:
+        sys.stderr.write(f"Processing {len(text)} characters...\n")
+
+    return {
+        "input": text,
+        "length": len(text),
+        "word_count": len(text.split()),
+        "status": "success",
+    }
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    # Determine whether terminal supports color output
+    use_color = sys.stdout.isatty() and not args.no_color
+    bold = "\033[1m" if use_color else ""
+    green = "\033[1;32m" if use_color else ""
+    reset = "\033[0m" if use_color else ""
+
+    # Resolve input from arguments or stdin
+    raw_input = ""
+    if args.input_text and args.input_text != ["-"]:
+        raw_input = " ".join(args.input_text)
+    elif not sys.stdin.isatty() or (args.input_text and args.input_text == ["-"]):
+        raw_input = sys.stdin.read().strip()
+    else:
+        parser.print_help(sys.stderr)
+        return 1
+
+    if not raw_input:
+        sys.stderr.write("Error: No input provided.\n")
+        return 1
+
+    # Execute core logic
+    try:
+        result = process_data(raw_input, verbose=args.verbose)
+    except Exception as e:
+        sys.stderr.write(f"Error: {e}\n")
+        return 1
+
+    # Output formatting
+    if args.json:
+        output_str = json.dumps(result, indent=2)
+    else:
+        output_str = (
+            f"{bold}Result:{reset} {green}{result['status']}{reset} | "
+            f"Words: {result['word_count']} | Length: {result['length']}"
+        )
+
+    # Deliver output to file or stdout
+    if args.output:
+        try:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(output_str + "\n")
+            if not args.quiet:
+                print(f"Output saved to {args.output}")
+        except OSError as e:
+            sys.stderr.write(f"Error writing to {args.output}: {e}\n")
+            return 1
+    else:
+        print(output_str)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
