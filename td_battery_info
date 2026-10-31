@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""
+td_battery_info - Battery health, capacity, and charging current estimation.
+Part of T-Dynamos shell_scripts.
+"""
+
+import sys
+import os
+import glob
+import json
+import argparse
+from pathlib import Path
+
+DEFAULT_POWER_SUPPLY_DIR = "/sys/class/power_supply"
+
+
+def find_batteries() -> list[str]:
+    """Find all battery device names available in sysfs."""
+    paths = glob.glob(os.path.join(DEFAULT_POWER_SUPPLY_DIR, "BAT*"))
+    if not paths:
+        # Fallback search for any power supply of type Battery
+        for p in glob.glob(os.path.join(DEFAULT_POWER_SUPPLY_DIR, "*")):
+            type_file = os.path.join(p, "type")
+            if os.path.isfile(type_file):
+                try:
+                    with open(type_file) as f:
+                        if f.read().strip().lower() == "battery":
+                            paths.append(p)
+                except OSError:
+                    pass
+    return sorted([os.path.basename(p) for p in paths])
+
+
+def read_sysfs_int(path: Path) -> int | None:
+    """Read an integer value from a sysfs file, or None if unavailable."""
+    if not path.is_file():
+        return None
+    try:
+        return int(path.read_text().strip())
+    except (ValueError, OSError):
+        return None
+
+
+def read_sysfs_str(path: Path) -> str | None:
+    """Read a string value from a sysfs file, or None if unavailable."""
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
+
+
+def get_battery_metrics(bat_dir: Path, factor: float = 80 * 0.998) -> dict:
+    """Extract metrics from battery sysfs directory."""
+    # Read full charge vs design charge
+    cf = read_sysfs_int(bat_dir / "charge_full")
+    cfd = read_sysfs_int(bat_dir / "charge_full_design")
+    now = read_sysfs_int(bat_dir / "charge_now")
+    unit = "mAh"
+
+    # Fallback to energy_* (µWh) if charge_* (µAh) is not provided
+    if cf is None or cfd is None:
+        cf = read_sysfs_int(bat_dir / "energy_full")
+        cfd = read_sysfs_int(bat_dir / "energy_full_design")
+        now = read_sysfs_int(bat_dir / "energy_now")
+        unit = "mWh"
+
+    if cf is None or cfd is None or cfd == 0:
+        raise ValueError(f"Could not read valid battery capacity metrics from {bat_dir}")
+
+    health_pct = (cf / cfd) * 100.0
+    capacity_now_val = (now * 1e-3) if now is not None else None
+    capacity_full_val = cf * 1e-3
+    capacity_design_val = cfd * 1e-3
+
+    # Estimate CC phase charging current:
+    # Formula: cf (in µAh) * (80 * 0.998) * 1e-8 => Amperes
+    cc_estimate = cf * factor * 1e-8
+
+    voltage_uv = read_sysfs_int(bat_dir / "voltage_now")
+    voltage_v = (voltage_uv * 1e-6) if voltage_uv is not None else None
+
+    status = read_sysfs_str(bat_dir / "status") or "Unknown"
+    model = read_sysfs_str(bat_dir / "model_name") or "Unknown"
+    vendor = read_sysfs_str(bat_dir / "manufacturer")
+    tech = read_sysfs_str(bat_dir / "technology")
+    cycles = read_sysfs_int(bat_dir / "cycle_count")
+
+    return {
+        "battery": bat_dir.name,
+        "path": str(bat_dir),
+        "health_percent": round(health_pct, 2),
+        "capacity_full": round(capacity_full_val, 1),
+        "capacity_design": round(capacity_design_val, 1),
+        "capacity_now": round(capacity_now_val, 1) if capacity_now_val is not None else None,
+        "unit": unit,
+        "cc_phase_estimate_a": round(cc_estimate, 2),
+        "status": status,
+        "voltage_v": round(voltage_v, 2) if voltage_v is not None else None,
+        "model": model,
+        "vendor": vendor,
+        "technology": tech,
+        "cycle_count": cycles,
+    }
+
+
+def format_health_color(health: float, use_color: bool = True) -> str:
+    """Format health percentage with ANSI color code."""
+    if not use_color:
+        return f"{health:.2f}%"
+    if health >= 80.0:
+        code = "\033[1;32m"  # Bold green
+    elif health >= 50.0:
+        code = "\033[1;33m"  # Bold yellow
+    else:
+        code = "\033[1;31m"  # Bold red
+    return f"{code}{health:.2f}%\033[0m"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="td_battery_info",
+        description="Display battery health percentage, capacity, and CC charge current estimate.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  %(prog)s
+  %(prog)s -b BAT0
+  %(prog)s --json
+  %(prog)s --short
+  %(prog)s -v
+""",
+    )
+    parser.add_argument(
+        "-b",
+        "--battery",
+        metavar="BAT",
+        help="Battery device name or sysfs path (default: auto-detected, e.g. BAT0).",
+    )
+    parser.add_argument(
+        "-j",
+        "--json",
+        action="store_true",
+        help="Output battery metrics in JSON format.",
+    )
+    parser.add_argument(
+        "-s",
+        "--short",
+        action="store_true",
+        help="Output a single-line summary of battery health and capacity.",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Display extended battery hardware details (model, technology, cycles, voltage).",
+    )
+    parser.add_argument(
+        "--factor",
+        type=float,
+        default=80 * 0.998,
+        help="CC phase estimation factor constant (default: 79.84).",
+    )
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable ANSI colored output.",
+    )
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    use_color = sys.stdout.isatty() and not args.no_color
+
+    # Resolve battery directory
+    bat_dir = None
+    if args.battery:
+        candidate = Path(args.battery)
+        if candidate.is_dir():
+            bat_dir = candidate
+        else:
+            bat_dir = Path(DEFAULT_POWER_SUPPLY_DIR) / args.battery
+    else:
+        available = find_batteries()
+        if not available:
+            sys.stderr.write(
+                f"Error: No battery found under '{DEFAULT_POWER_SUPPLY_DIR}'.\n"
+            )
+            return 1
+        bat_dir = Path(DEFAULT_POWER_SUPPLY_DIR) / available[0]
+
+    if not bat_dir.is_dir():
+        sys.stderr.write(f"Error: Battery path '{bat_dir}' does not exist.\n")
+        return 1
+
+    try:
+        metrics = get_battery_metrics(bat_dir, factor=args.factor)
+    except Exception as e:
+        sys.stderr.write(f"Error reading battery info: {e}\n")
+        return 1
+
+    if args.json:
+        print(json.dumps(metrics, indent=2))
+        return 0
+
+    if args.short:
+        health_str = format_health_color(metrics["health_percent"], use_color)
+        print(
+            f"{metrics['battery']}: Health {health_str} | "
+            f"Capacity {metrics['capacity_full']:.0f}/{metrics['capacity_design']:.0f} {metrics['unit']} | "
+            f"Status {metrics['status']} | "
+            f"CC Estimate {metrics['cc_phase_estimate_a']:.2f}A"
+        )
+        return 0
+
+    # Formatted standard output
+    header_color = "\033[1;36m" if use_color else ""
+    reset_color = "\033[0m" if use_color else ""
+    bold = "\033[1m" if use_color else ""
+
+    print(f"{header_color}--- Battery Information ({metrics['battery']}) ---{reset_color}")
+    print(f"{bold}Health           :{reset_color} {format_health_color(metrics['health_percent'], use_color)}")
+    print(f"{bold}Capacity         :{reset_color} {metrics['capacity_full']:.0f}/{metrics['capacity_design']:.0f} {metrics['unit']}")
+    print(f"{bold}Status           :{reset_color} {metrics['status']}")
+    print(f"{bold}CC phase estimate:{reset_color} {metrics['cc_phase_estimate_a']:.2f}A")
+
+    if args.verbose:
+        if metrics["voltage_v"] is not None:
+            print(f"{bold}Voltage          :{reset_color} {metrics['voltage_v']} V")
+        if metrics["model"] != "Unknown":
+            print(f"{bold}Model            :{reset_color} {metrics['model']}")
+        if metrics["vendor"]:
+            print(f"{bold}Manufacturer     :{reset_color} {metrics['vendor']}")
+        if metrics["technology"]:
+            print(f"{bold}Technology       :{reset_color} {metrics['technology']}")
+        if metrics["cycle_count"] is not None:
+            print(f"{bold}Cycle count      :{reset_color} {metrics['cycle_count']}")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

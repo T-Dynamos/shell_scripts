@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+"""
+td_battery_watch - Real-time terminal battery monitor and power consumption tracker.
+Part of T-Dynamos shell_scripts.
+"""
+
+import sys
+import os
+import time
+import glob
+import json
+import argparse
+from pathlib import Path
+
+DEFAULT_POWER_SUPPLY_DIR = "/sys/class/power_supply"
+
+
+def find_batteries() -> list[str]:
+    """Find all battery device names available in sysfs."""
+    paths = glob.glob(os.path.join(DEFAULT_POWER_SUPPLY_DIR, "BAT*"))
+    if not paths:
+        for p in glob.glob(os.path.join(DEFAULT_POWER_SUPPLY_DIR, "*")):
+            type_file = os.path.join(p, "type")
+            if os.path.isfile(type_file):
+                try:
+                    with open(type_file) as f:
+                        if f.read().strip().lower() == "battery":
+                            paths.append(p)
+                except OSError:
+                    pass
+    return sorted([os.path.basename(p) for p in paths])
+
+
+def read_int(path: Path) -> int | None:
+    """Read an integer from a sysfs file, or None."""
+    if not path.is_file():
+        return None
+    try:
+        return int(path.read_text().strip())
+    except (ValueError, OSError):
+        return None
+
+
+def read_str(path: Path) -> str | None:
+    """Read a string from a sysfs file, or None."""
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
+
+
+def format_time(sec: float) -> str:
+    """Format seconds into hours and minutes."""
+    if sec < 0 or sec > 86400 * 7:
+        return "N/A"
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    s = int(sec % 60)
+    if h > 0:
+        return f"{h}h {m:02d}m"
+    return f"{m}m {s:02d}s"
+
+
+def make_progress_bar(percent: float, width: int = 20, use_color: bool = True) -> str:
+    """Generate a visual text progress bar for battery charge."""
+    clamped = max(0.0, min(100.0, percent))
+    filled_len = int(round(width * clamped / 100.0))
+    empty_len = width - filled_len
+    bar = "█" * filled_len + "░" * empty_len
+
+    if not use_color:
+        return f"[{bar}]"
+
+    if clamped >= 50.0:
+        color = "\033[32m"  # Green
+    elif clamped >= 20.0:
+        color = "\033[33m"  # Yellow
+    else:
+        color = "\033[31m"  # Red
+    reset = "\033[0m"
+
+    return f"[{color}{bar}{reset}]"
+
+
+def get_snapshot(bat_dir: Path) -> dict:
+    """Read current battery state from sysfs."""
+    # Check charge first, fallback to energy
+    charge_now = read_int(bat_dir / "charge_now")
+    charge_full = read_int(bat_dir / "charge_full")
+    current_now = read_int(bat_dir / "current_now")
+    unit = "mAh"
+
+    if charge_now is None or charge_full is None:
+        charge_now = read_int(bat_dir / "energy_now")
+        charge_full = read_int(bat_dir / "energy_full")
+        current_now = read_int(bat_dir / "power_now")
+        unit = "mWh"
+
+    if charge_now is None or charge_full is None or charge_full == 0:
+        raise ValueError(f"Unable to read battery levels from {bat_dir}")
+
+    voltage_uv = read_int(bat_dir / "voltage_now")
+    status = (read_str(bat_dir / "status") or "Unknown").capitalize()
+
+    percent = (charge_now / charge_full) * 100.0
+    current_ma = (current_now / 1000.0) if current_now is not None else 0.0
+
+    # Calculate wattage if voltage is available
+    power_w = None
+    if current_now is not None and voltage_uv is not None:
+        power_w = (current_now * voltage_uv) * 1e-12
+
+    # Calculate time remaining
+    time_label = "Time"
+    time_val = "N/A"
+    time_sec = None
+
+    status_lower = status.lower()
+    if current_ma > 0:
+        if status_lower == "discharging":
+            time_label = "Time to empty"
+            time_sec = (charge_now / current_now) * 3600.0
+            time_val = format_time(time_sec)
+        elif status_lower == "charging":
+            time_label = "Time to full"
+            remaining = charge_full - charge_now
+            time_sec = (remaining / current_now) * 3600.0
+            time_val = format_time(time_sec)
+        elif status_lower == "full":
+            time_val = "Full (charged)"
+    else:
+        time_val = "N/A (idle)"
+
+    return {
+        "battery": bat_dir.name,
+        "status": status,
+        "percentage": round(percent, 2),
+        "charge_now": round(charge_now / 1000.0, 1),
+        "charge_full": round(charge_full / 1000.0, 1),
+        "unit": unit,
+        "current_ma": round(current_ma, 2),
+        "power_w": round(power_w, 2) if power_w is not None else None,
+        "time_label": time_label,
+        "time_remaining_str": time_val,
+        "time_remaining_seconds": round(time_sec, 1) if time_sec is not None else None,
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="td_battery_watch",
+        description="Live terminal battery monitor and power consumption tracker.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  %(prog)s
+  %(prog)s -i 1.0
+  %(prog)s --once
+  %(prog)s --once --json
+  %(prog)s -b BAT0 --no-clear
+""",
+    )
+    parser.add_argument(
+        "-b",
+        "--battery",
+        metavar="BAT",
+        help="Battery device name or sysfs path (default: auto-detected, e.g. BAT0).",
+    )
+    parser.add_argument(
+        "-i",
+        "--interval",
+        type=float,
+        default=0.5,
+        help="Refresh interval in seconds (default: 0.5).",
+    )
+    parser.add_argument(
+        "-1",
+        "--once",
+        action="store_true",
+        help="Display battery status snapshot once and exit (no continuous loop).",
+    )
+    parser.add_argument(
+        "-j",
+        "--json",
+        action="store_true",
+        help="Output snapshot in JSON format.",
+    )
+    parser.add_argument(
+        "-n",
+        "--no-clear",
+        action="store_true",
+        help="Do not clear screen between updates (append/scroll mode).",
+    )
+    parser.add_argument(
+        "--no-bar",
+        action="store_true",
+        help="Hide graphical charge progress bar.",
+    )
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable ANSI colored output.",
+    )
+    return parser
+
+
+def print_dashboard(data: dict, show_bar: bool = True, use_color: bool = True) -> None:
+    """Print formatted terminal dashboard."""
+    bold = "\033[1m" if use_color else ""
+    reset = "\033[0m" if use_color else ""
+
+    status_str = data["status"]
+    if use_color:
+        s_low = status_str.lower()
+        if s_low == "charging":
+            status_str = f"\033[1;32m{status_str}\033[0m"
+        elif s_low == "discharging":
+            status_str = f"\033[1;33m{status_str}\033[0m"
+        elif s_low == "full":
+            status_str = f"\033[1;36m{status_str}\033[0m"
+
+    bar_str = ""
+    if show_bar:
+        bar_str = f" {make_progress_bar(data['percentage'], width=15, use_color=use_color)}"
+
+    print(f"{bold}Battery       :{reset} {data['battery']}")
+    print(f"{bold}Status        :{reset} {status_str}")
+    print(
+        f"{bold}Charge        :{reset} {data['percentage']:.2f}%{bar_str} "
+        f"({data['charge_now']:.0f}/{data['charge_full']:.0f} {data['unit']})"
+    )
+
+    power_suffix = f" (~{data['power_w']:.2f} W)" if data["power_w"] is not None else ""
+    print(f"{bold}Current       :{reset} {data['current_ma']:.2f} mA{power_suffix}")
+    print(f"{bold}{data['time_label']:<14}:{reset} {data['time_remaining_str']}")
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    use_color = sys.stdout.isatty() and not args.no_color
+
+    # Resolve battery directory
+    bat_dir = None
+    if args.battery:
+        candidate = Path(args.battery)
+        if candidate.is_dir():
+            bat_dir = candidate
+        else:
+            bat_dir = Path(DEFAULT_POWER_SUPPLY_DIR) / args.battery
+    else:
+        available = find_batteries()
+        if not available:
+            sys.stderr.write(f"Error: No battery found in '{DEFAULT_POWER_SUPPLY_DIR}'.\n")
+            return 1
+        bat_dir = Path(DEFAULT_POWER_SUPPLY_DIR) / available[0]
+
+    if not bat_dir.is_dir():
+        sys.stderr.write(f"Error: Battery path '{bat_dir}' does not exist.\n")
+        return 1
+
+    # Single snapshot mode
+    if args.once:
+        try:
+            snap = get_snapshot(bat_dir)
+        except Exception as e:
+            sys.stderr.write(f"Error reading battery: {e}\n")
+            return 1
+
+        if args.json:
+            print(json.dumps(snap, indent=2))
+        else:
+            print_dashboard(snap, show_bar=not args.no_bar, use_color=use_color)
+        return 0
+
+    # Continuous monitoring loop
+    try:
+        while True:
+            try:
+                snap = get_snapshot(bat_dir)
+            except Exception:
+                time.sleep(args.interval)
+                continue
+
+            if args.json:
+                print(json.dumps(snap))
+            else:
+                if not args.no_clear:
+                    # Clear screen and move cursor to top-left
+                    print("\033[2J\033[H", end="")
+                print_dashboard(snap, show_bar=not args.no_bar, use_color=use_color)
+
+            time.sleep(args.interval)
+
+    except KeyboardInterrupt:
+        if not args.no_clear and not args.json:
+            print("\nMonitoring stopped.")
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-math2png - Render LaTeX math expressions to high-resolution PNG images,
+td_math2png - Render LaTeX math expressions to high-resolution PNG images,
 copy them to the Wayland clipboard via wl-copy, and optionally view them in swayimg.
 """
 
@@ -208,7 +208,7 @@ def view_in_swayimg(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="math2png",
+        prog="td_math2png",
         description="Render a LaTeX math expression to PNG, copy to clipboard with wl-copy, and view with swayimg.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:

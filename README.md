@@ -1,6 +1,6 @@
 # shell_scripts
 
-A collection of lightweight, practical command-line utilities designed for Linux and Wayland, intended to be installed in `~/.local/bin`.
+A collection of lightweight, practical command-line utilities designed for Linux and Wayland, prefixed with `td_` (T-Dynamos) and intended to be installed in `~/.local/bin`.
 
 ---
 
@@ -11,10 +11,10 @@ The scripts require Python 3 and a few desktop tools depending on the utility:
 | Dependency | Purpose | Required by |
 |---|---|---|
 | `python3` | Script execution runtime | All scripts |
-| `python-matplotlib` | Standalone LaTeX math engine and PNG rendering | `math2png` |
-| `wl-clipboard` (`wl-copy`) | Copying images and text to Wayland clipboard | `math2png` |
-| `swayimg` | Wayland-native image viewer | `math2png` (optional, for viewing) |
-| `/sys/class/power_supply/` | Linux kernel battery sysfs interface | `battery_info`, `battery_watch` |
+| `python-matplotlib` | Standalone LaTeX math engine and PNG rendering | `td_math2png` |
+| `wl-clipboard` (`wl-copy`) | Copying images and text to Wayland clipboard | `td_math2png` |
+| `swayimg` | Wayland-native image viewer | `td_math2png` (optional, for viewing) |
+| `/sys/class/power_supply/` | Linux kernel battery sysfs interface | `td_battery_info`, `td_battery_watch` |
 
 ### One-line prerequisite installation
 
@@ -49,29 +49,64 @@ Choose the command matching your Linux distribution:
 
 ## Installation & Updates
 
-Ensure `~/.local/bin` is in your `$PATH` (e.g. In `~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish`):
+Ensure `~/.local/bin` is in your `$PATH` (e.g. in `~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish`):
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ### One-line command to install or update in `~/.local/bin`
 
-Run this single command from within the cloned repository to install or update all scripts into `~/.local/bin`:
+Run this single command from within the cloned repository to install or update all `td_*` scripts into `~/.local/bin`:
 
 ```bash
-mkdir -p ~/.local/bin && install -m 755 -v battery_info battery_watch math2png ~/.local/bin/
+mkdir -p ~/.local/bin && install -m 755 -v td_* ~/.local/bin/
 ```
 
 > **Tip (Symlink install)**: If you develop or pull git changes frequently, you can symlink them so updates reflect immediately without re-copying:
 > ```bash
-> mkdir -p ~/.local/bin && ln -sf "$PWD"/{battery_info,battery_watch,math2png} ~/.local/bin/
+> mkdir -p ~/.local/bin && ln -sf "$PWD"/td_* ~/.local/bin/
 > ```
+
+---
+
+## Quick Reference (`td_script_info`)
+
+Run `td_script_info` to get a quick one-line summary and example usage for all available scripts:
+
+```bash
+td_script_info
+```
+
+Or for a compact table:
+```bash
+td_script_info --compact
+```
 
 ---
 
 ## Included Scripts
 
-### 1. `math2png`
+### 1. `td_script_info`
+
+Interactive directory and summary utility for all scripts in the suite.
+
+#### Features
+- Displays one-line description and copy-pasteable example command for every script.
+- Shows whether each script is currently installed in your `$PATH`.
+- Supports filtering by specific script name (`td_script_info td_math2png`).
+- Supports `--json` for scripting integration and `--compact` for quick glances.
+
+#### Usage
+```bash
+td_script_info
+td_script_info td_math2png
+td_script_info --compact
+td_script_info --json
+```
+
+---
+
+### 2. `td_math2png`
 
 Renders LaTeX math formulas directly to high-resolution PNG images, copies them to the Wayland clipboard via `wl-copy`, and optionally displays them in `swayimg`. Uses Computer Modern serif math typography (`mathtext.fontset: cm`, `font.family: serif`).
 
@@ -86,25 +121,25 @@ Renders LaTeX math formulas directly to high-resolution PNG images, copies them 
 
 ```bash
 # Render and copy quadratic formula to clipboard
-math2png '\frac{-b \pm \sqrt{b^2-4ac}}{2a}'
+td_math2png '\frac{-b \pm \sqrt{b^2-4ac}}{2a}'
 
 # Render, copy to clipboard, and open in swayimg
-math2png -s '\frac{-b \pm \sqrt{b^2-4ac}}{2a}'
+td_math2png -s '\frac{-b \pm \sqrt{b^2-4ac}}{2a}'
 
 # Open in swayimg in the background (does not block terminal)
-math2png -s --detach '\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}'
+td_math2png -s --detach '\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}'
 
 # Render with a transparent background
-math2png -t -s '\sum_{k=1}^n k = \frac{n(n+1)}{2}'
+td_math2png -t -s '\sum_{k=1}^n k = \frac{n(n+1)}{2}'
 
 # Dark mode theme (white text on dark background)
-math2png -d -s '\mathbf{F} = m \mathbf{a}'
+td_math2png -d -s '\mathbf{F} = m \mathbf{a}'
 
 # Save output to a specific PNG file
-math2png -o formula.png '\lim_{x \to 0} \frac{\sin x}{x} = 1'
+td_math2png -o formula.png '\lim_{x \to 0} \frac{\sin x}{x} = 1'
 
 # Read formula from stdin
-echo '\alpha^2 + \beta^2 = \gamma^2' | math2png -s
+echo '\alpha^2 + \beta^2 = \gamma^2' | td_math2png -s
 ```
 
 #### Options Reference
@@ -130,46 +165,89 @@ echo '\alpha^2 + \beta^2 = \gamma^2' | math2png -s
 
 ---
 
-### 2. `battery_info`
+### 3. `td_battery_info`
 
-Quick battery diagnostics script that reads from `/sys/class/power_supply/BAT0/` and prints health metrics.
+Quick battery diagnostics script reading from Linux sysfs (`/sys/class/power_supply/`).
+
+#### Features
+- Full argument parser with multiple output modes (standard, short, JSON, verbose).
+- Automatically discovers batteries (`BAT0`, `BAT1`, etc.).
+- Color-coded health percentage indicator.
+- Support for systems using `charge_*` (µAh) and `energy_*` (µWh).
 
 #### Metrics Reported
 - **Health**: Percentage of current full charge capacity relative to design capacity (`(charge_full / charge_full_design) * 100`).
-- **Capacity**: Formatted in `mAh` (`charge_full / charge_full_design`).
+- **Capacity**: Formatted in `mAh` (or `mWh`).
 - **CC Phase Estimate**: Estimated Constant Current charging phase current in Amperes.
+- **Hardware Info** (`-v`): Battery model, manufacturer, technology, cycle count, and voltage.
 
 #### Usage
 ```bash
-battery_info
+# Standard formatted output
+td_battery_info
+
+# Single-line summary
+td_battery_info --short
+
+# JSON output (ideal for Waybar, i3blocks, polybar, or scripts)
+td_battery_info --json
+
+# Detailed hardware info
+td_battery_info -v
+
+# Target a specific battery
+td_battery_info -b BAT0
 ```
 
 #### Example Output
 ```text
-Health: 87.42%
-Capacity: 4120/4713 mAh
-CC phase estimate: 3.29A
+--- Battery Information (BAT0) ---
+Health           : 78.23%
+Capacity         : 1721/2200 mAh
+Status           : Full
+CC phase estimate: 1.37A
 ```
 
 ---
 
-### 3. `battery_watch`
+### 4. `td_battery_watch`
 
-Interactive live terminal monitor for real-time battery status and power consumption.
+Interactive live terminal monitor and power consumption tracker.
 
 #### Features
-- Refreshes every 0.5 seconds.
-- Displays charging status (`Charging`, `Discharging`, `Full`, etc.).
-- Displays current battery charge level and percentage.
-- Displays instantaneous current rate in `mA`.
-- Calculates and estimates **Time to empty** (while discharging) or **Time to full** (while charging).
+- Full argument parser with configurable refresh rate, `--once` mode, and `--json` export.
+- Graphical charge progress bar (`[███████████████] 100%`).
+- Real-time power draw calculation in milliAmperes (mA) and Watts (W).
+- Live estimation of **Time to empty** (while discharging) or **Time to full** (while charging).
+- Color-coded status alerts (Charging, Discharging, Full).
+- Clean exit on `Ctrl+C` without terminal cursor or traceback glitches.
 
 #### Usage
 ```bash
-battery_watch
+# Live dashboard (default 0.5s refresh)
+td_battery_watch
+
+# Custom refresh interval
+td_battery_watch -i 1.0
+
+# Print single status snapshot and exit (no infinite loop)
+td_battery_watch --once
+
+# Single snapshot in JSON format
+td_battery_watch --once --json
+
+# Append mode (do not clear screen)
+td_battery_watch --no-clear
 ```
 
-Press `Ctrl+C` to exit the monitor.
+#### Example Output
+```text
+Battery       : BAT0
+Status        : Full
+Charge        : 100.00% [███████████████] (1721/1721 mAh)
+Current       : 1.00 mA (~0.02 W)
+Time          : Full (charged)
+```
 
 ---
 
