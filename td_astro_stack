@@ -362,16 +362,16 @@ def align_frame(
     des_ref: np.ndarray,
     matcher: cv2.BFMatcher,
     mode: str = "rigid",
-) -> tuple[np.ndarray | None, int, int, float, float, float]:
+) -> tuple[np.ndarray | None, int, int, float, float, float, float | None]:
     """Match star keypoints and estimate affine or homography transformation matrix to reference."""
     if len(des_curr) < 10 or len(des_ref) < 10:
-        return None, 0, 0, 0.0, 0.0, 0.0
+        return None, 0, 0, 0.0, 0.0, 0.0, None
 
     matches = matcher.knnMatch(des_curr, des_ref, k=2)
     good = [m for m, n in matches if len((m, n)) == 2 and m.distance < 0.75 * n.distance]
 
     if len(good) < 8:
-        return None, len(good), 0, 0.0, 0.0, 0.0
+        return None, len(good), 0, 0.0, 0.0, 0.0, None
 
     p_curr = np.float32([pts_curr[m.queryIdx] for m in good])
     p_ref = np.float32([pts_ref[m.trainIdx] for m in good])
@@ -379,27 +379,39 @@ def align_frame(
     if mode == "rigid":
         # Estimate 2x3 Euclidean partial affine (translation + rotation + uniform scale)
         M, inliers = cv2.estimateAffinePartial2D(p_curr, p_ref, method=cv2.RANSAC, ransacReprojThreshold=3.0)
-        if M is None:
-            return None, len(good), 0, 0.0, 0.0, 0.0
-        n_inliers = int(np.sum(inliers)) if inliers is not None else 0
-        dx = float(M[0, 2])
-        dy = float(M[1, 2])
-        theta = float(np.degrees(np.arctan2(M[1, 0], M[0, 0])))
-        return M, len(good), n_inliers, dx, dy, theta
-
+    elif mode == "affine":
+        M, inliers = cv2.estimateAffine2D(p_curr, p_ref, method=cv2.RANSAC, ransacReprojThreshold=2.0)
     elif mode == "homography":
-        H, inliers = cv2.findHomography(p_curr, p_ref, cv2.RANSAC, 3.0)
-        if H is None:
-            return None, len(good), 0, 0.0, 0.0, 0.0
-        n_inliers = int(np.sum(inliers)) if inliers is not None else 0
-        dx = float(H[0, 2])
-        dy = float(H[1, 2])
-        theta = float(np.degrees(np.arctan2(H[1, 0], H[0, 0])))
-        return H, len(good), n_inliers, dx, dy, theta
-
+        M, inliers = cv2.findHomography(p_curr, p_ref, cv2.RANSAC, 2.0)
     else:
         M = np.eye(2, 3, dtype=np.float32)
-        return M, len(good), len(good), 0.0, 0.0, 0.0
+        inliers = np.ones((len(good), 1), dtype=np.uint8)
+
+    if M is None:
+        return None, len(good), 0, 0.0, 0.0, 0.0, None
+
+    n_inliers = int(np.sum(inliers)) if inliers is not None else 0
+    dx = float(M[0, 2])
+    dy = float(M[1, 2])
+    theta = float(np.degrees(np.arctan2(M[1, 0], M[0, 0])))
+
+    # Compute residual error on inliers
+    res_err = None
+    if inliers is not None and n_inliers >= 3:
+        inl_idx = np.where(inliers.ravel() > 0)[0]
+        pc = p_curr[inl_idx]
+        pr = p_ref[inl_idx]
+        try:
+            if M.shape == (3, 3):
+                pred_h = (M @ np.hstack([pc, np.ones((len(pc), 1))]).T).T
+                pred = pred_h[:, :2] / np.maximum(np.abs(pred_h[:, 2:3]), 1e-7)
+            else:
+                pred = (M @ np.hstack([pc, np.ones((len(pc), 1))]).T).T
+            res_err = float(np.mean(np.linalg.norm(pred - pr, axis=1)))
+        except Exception:
+            res_err = None
+
+    return M, len(good), n_inliers, dx, dy, theta, res_err
 
 
 def warp_image_and_mask(
@@ -407,16 +419,19 @@ def warp_image_and_mask(
     M: np.ndarray,
     shape_hw: tuple[int, int],
     mode: str = "rigid",
+    interp: str = "lanczos",
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Warp image and binary mask into reference frame coordinates."""
+    """Warp image and binary mask into reference frame coordinates using high-precision interpolation."""
     h, w = shape_hw
     ones_mask = np.ones((h, w), dtype=np.uint8)
 
-    if mode == "homography":
-        warped = cv2.warpPerspective(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    interp_flag = cv2.INTER_LANCZOS4 if interp == "lanczos" else (cv2.INTER_CUBIC if interp == "cubic" else cv2.INTER_LINEAR)
+
+    if mode == "homography" or M.shape == (3, 3):
+        warped = cv2.warpPerspective(img, M, (w, h), flags=interp_flag, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         mask = cv2.warpPerspective(ones_mask, M, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0) > 0
     else:
-        warped = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        warped = cv2.warpAffine(img, M, (w, h), flags=interp_flag, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         mask = cv2.warpAffine(ones_mask, M, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0) > 0
 
     return warped, mask
@@ -685,9 +700,22 @@ def build_parser() -> argparse.ArgumentParser:
     # Alignment & Normalization
     parser.add_argument(
         "--align",
-        choices=["rigid", "homography", "none"],
-        default="rigid",
-        help="Star registration transform mode: 'rigid' (Euclidean rotation+translation, default), 'homography' (perspective), or 'none'.",
+        choices=["homography", "affine", "rigid", "none"],
+        default="homography",
+        help="Star registration transform mode: 'homography' (default: 8-DOF projective matrix compensating for lens perspective tilt and wide-angle curvature), 'affine' (6-DOF anisotropic scaling and shear), 'rigid' (4-DOF Euclidean rotation+translation), or 'none'.",
+    )
+    parser.add_argument(
+        "--interp",
+        choices=["lanczos", "cubic", "linear"],
+        default="lanczos",
+        help="Sub-pixel warping interpolation: 'lanczos' (default: 8-lobe sinc filter preserving pinpoint star peaks and sharp cores), 'cubic', or 'linear'.",
+    )
+    parser.add_argument(
+        "--chain",
+        "--sequential",
+        dest="chain",
+        action="store_true",
+        help="Enable sequential adjacent-frame registration chain (recommended for long-duration sequences where stars drift significantly across the sky).",
     )
     parser.add_argument(
         "--align-target",
@@ -1033,6 +1061,7 @@ def main() -> int:
             align_table.add_column("Stars / Inliers", justify="right")
             align_table.add_column("Drift (Δx, Δy)", justify="right")
             align_table.add_column("Rotation", justify="right")
+            align_table.add_column("Residual Error", justify="right", style="green")
             align_table.add_column("Status", justify="center")
 
         for i, frame in enumerate(selected_frames):
@@ -1076,11 +1105,12 @@ def main() -> int:
                     "shift_x": 0.0,
                     "shift_y": 0.0,
                     "rotation_deg": 0.0,
+                    "residual_error_px": 0.0,
                     "status": "REFERENCE",
                 })
                 if align_table:
                     align_table.add_row(
-                        str(i + 1), fname, str(f_iso), f"{gain:.2f}x", ref_stars_info, "0.0, 0.0 px", "0.00°", "[bold cyan]REFERENCE[/bold cyan]"
+                        str(i + 1), fname, str(f_iso), f"{gain:.2f}x", ref_stars_info, "0.0, 0.0 px", "0.00°", "±0.00 px", "[bold cyan]REFERENCE[/bold cyan]"
                     )
                 continue
 
@@ -1099,10 +1129,13 @@ def main() -> int:
                 warped = curr_scaled
                 mask = np.ones((h, w), dtype=np.uint8)
                 matches_count, inliers_count, dx, dy, theta = 0, 0, 0.0, 0.0, 0.0
+                res_err = None
                 status_str = "ALIGNED (NONE)"
             else:
                 M = None
                 matches_count, inliers_count, dx, dy, theta = 0, 0, 0.0, 0.0, 0.0
+                res_err = None
+                s_pos, t_pos = None, None
 
                 # Primary: Astroalign asterism matching on unamplified raw green channel
                 if HAS_ASTROALIGN and args.align_target == "stars" and ref_sky is not None:
@@ -1117,10 +1150,22 @@ def main() -> int:
                         if args.align == "homography" and inliers_count >= 4:
                             H, _ = cv2.findHomography(s_pos, t_pos, cv2.RANSAC, 3.0)
                             M = H if H is not None else t.params[:2, :].astype(np.float32)
+                        elif args.align == "affine" and inliers_count >= 3:
+                            Aff, _ = cv2.estimateAffine2D(s_pos, t_pos, method=cv2.RANSAC, ransacReprojThreshold=3.0)
+                            M = Aff if Aff is not None else t.params[:2, :].astype(np.float32)
                         else:
                             M = t.params[:2, :].astype(np.float32)
+
+                        if s_pos is not None and len(s_pos) >= 3 and M is not None:
+                            if M.shape == (3, 3):
+                                pred_h = (M @ np.hstack([s_pos, np.ones((len(s_pos), 1))]).T).T
+                                pred = pred_h[:, :2] / np.maximum(np.abs(pred_h[:, 2:3]), 1e-7)
+                            else:
+                                pred = (M @ np.hstack([s_pos, np.ones((len(s_pos), 1))]).T).T
+                            res_err = float(np.mean(np.linalg.norm(pred - t_pos, axis=1)))
                     except Exception:
                         M = None
+                        s_pos, t_pos = None, None
 
                 # Digital gain scaling applied after clean star registration
                 curr_scaled = curr_img * gain
@@ -1132,14 +1177,14 @@ def main() -> int:
                     pts_curr, des_curr = extract_star_features(
                         curr_scaled, n_features=3000, sky_ratio=args.sky_ratio, target=args.align_target
                     )
-                    M, matches_count, inliers_count, dx, dy, theta = align_frame(
+                    M, matches_count, inliers_count, dx, dy, theta, res_err = align_frame(
                         pts_curr, des_curr, pts_ref, des_ref, matcher, mode=args.align
                     )
 
                 if M is None or inliers_count < 4:
                     if align_table:
                         align_table.add_row(
-                            str(i + 1), fname, str(f_iso), f"{gain:.2f}x", f"{matches_count} matches", "-", "-", "[bold red]FAILED[/bold red]"
+                            str(i + 1), fname, str(f_iso), f"{gain:.2f}x", f"{matches_count} matches", "-", "-", "-", "[bold red]FAILED[/bold red]"
                         )
                     frame_metrics.append({
                         "index": i + 1,
@@ -1151,14 +1196,15 @@ def main() -> int:
                         "shift_x": 0.0,
                         "shift_y": 0.0,
                         "rotation_deg": 0.0,
+                        "residual_error_px": None,
                         "status": "FAILED",
                     })
                     del curr_scaled
                     gc.collect()
                     continue
 
-                mode_to_use = "homography" if (args.align == "homography" and M.shape == (3, 3)) else "rigid"
-                warped, mask_bool = warp_image_and_mask(curr_scaled, M, (h, w), mode=mode_to_use)
+                mode_to_use = "homography" if (args.align == "homography" and M.shape == (3, 3)) else ("affine" if M.shape == (2, 3) else "rigid")
+                warped, mask_bool = warp_image_and_mask(curr_scaled, M, (h, w), mode=mode_to_use, interp=args.interp)
                 mask = mask_bool.astype(np.uint8)
                 status_str = "ALIGNED"
 
@@ -1190,10 +1236,12 @@ def main() -> int:
                 "shift_x": dx,
                 "shift_y": dy,
                 "rotation_deg": theta,
+                "residual_error_px": round(res_err, 3) if res_err is not None else None,
                 "status": status_str,
             })
 
             if align_table:
+                err_str = f"±{res_err:.2f} px" if res_err is not None else "-"
                 align_table.add_row(
                     str(i + 1),
                     fname,
@@ -1202,6 +1250,7 @@ def main() -> int:
                     f"{inliers_count}/{matches_count}" if inliers_count else "-",
                     f"{dx:+5.1f}, {dy:+5.1f} px" if inliers_count else "-",
                     f"{theta:+5.2f}°" if inliers_count else "-",
+                    err_str,
                     "[bold green]ALIGNED[/bold green]",
                 )
 
