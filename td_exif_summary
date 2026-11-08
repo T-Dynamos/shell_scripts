@@ -979,6 +979,78 @@ def print_plain_dashboard(stats: dict, target_label: str, use_color: bool = True
     print("")
 
 
+def normalize_argv(argv: list[str]) -> list[str]:
+    """Pre-normalize command-line arguments to handle compound shortcuts like '--sort --shutter'."""
+    normalized = []
+    i = 0
+    sort_fields = {"name", "date", "iso", "shutter", "aperture", "focal", "size"}
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--sort" and i + 1 < len(argv):
+            next_arg = argv[i + 1]
+            if next_arg.startswith("--") and next_arg[2:] in sort_fields:
+                normalized.extend(["--sort", next_arg[2:], "--bare"])
+                i += 2
+                continue
+            elif next_arg.startswith("-") and next_arg[1:] in sort_fields:
+                normalized.extend(["--sort", next_arg[1:], "--bare"])
+                i += 2
+                continue
+        elif arg.startswith("--sort=--"):
+            field = arg[9:]
+            if field in sort_fields:
+                normalized.extend(["--sort", field, "--bare"])
+                i += 1
+                continue
+        normalized.append(arg)
+        i += 1
+    return normalized
+
+
+def print_bare(
+    records: list[dict],
+    target_path: Path,
+    sort_field: str = "shutter",
+    filenames_only: bool = False,
+    with_value: bool = False,
+    limit: int | None = None,
+) -> None:
+    """Print bare list of image files/paths, one per line, suitable for copy-pasting."""
+    shown = records[:limit] if (limit and limit > 0) else records
+    is_curr_dir = (target_path.resolve() == Path(".").resolve())
+
+    for r in shown:
+        if filenames_only:
+            out_str = r["filename"]
+        elif is_curr_dir:
+            try:
+                rel = os.path.relpath(r["path"], start=".")
+                out_str = rel if not rel.startswith("./") else rel[2:]
+            except ValueError:
+                out_str = r["filename"]
+        else:
+            out_str = r["path"]
+
+        if with_value:
+            if sort_field == "shutter":
+                val_str = r.get("shutter_str") or "N/A"
+            elif sort_field == "iso":
+                val_str = f"ISO {r.get('iso', 'N/A')}"
+            elif sort_field == "aperture":
+                val_str = format_aperture(r.get("f_number"))
+            elif sort_field == "focal":
+                val_str = r.get("focal_str") or "N/A"
+            elif sort_field == "date":
+                val_str = r.get("datetime_str") or "N/A"
+            elif sort_field == "size":
+                val_str = r.get("size_formatted") or "N/A"
+            else:
+                val_str = ""
+            print(f"{val_str:<10}\t{out_str}" if val_str else out_str)
+        else:
+            print(out_str)
+
+
 def print_csv(records: list[dict]) -> None:
     """Print photo records in CSV format."""
     import csv
@@ -1057,6 +1129,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output all records as CSV for spreadsheets or data analysis.",
     )
     parser.add_argument(
+        "-b",
+        "--bare",
+        action="store_true",
+        help="Output only bare image file paths (one per line, without tables or summary) for easy copy-pasting.",
+    )
+    parser.add_argument(
+        "--shutter",
+        action="store_true",
+        help="Sort images by shutter speed and output them bare (convenience shortcut for --sort shutter --bare).",
+    )
+    parser.add_argument(
+        "--filenames",
+        action="store_true",
+        help="When in bare mode, output only base filenames instead of directory paths.",
+    )
+    parser.add_argument(
+        "--with-value",
+        action="store_true",
+        help="When in bare mode, print the sorted value (e.g. shutter speed, ISO) alongside each file path.",
+    )
+    parser.add_argument(
         "--sort",
         choices=["name", "date", "iso", "shutter", "aperture", "focal", "size"],
         default="name",
@@ -1091,7 +1184,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     """Main execution flow."""
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(normalize_argv(sys.argv[1:]))
+
+    if args.shutter:
+        args.sort = "shutter"
+        args.bare = True
 
     use_color = sys.stdout.isatty() and not args.no_color
 
@@ -1123,19 +1220,35 @@ def main() -> int:
         if args.sort == "date":
             return r.get("datetime_str") or ""
         elif args.sort == "iso":
-            return r.get("iso") or 0
+            val = r.get("iso")
+            return val if val is not None else (0 if args.reverse else float("inf"))
         elif args.sort == "shutter":
-            return r.get("shutter_sec") or 0.0
+            val = r.get("shutter_sec")
+            return val if val is not None else (0.0 if args.reverse else float("inf"))
         elif args.sort == "aperture":
-            return r.get("f_number") or 0.0
+            val = r.get("f_number")
+            return val if val is not None else (0.0 if args.reverse else float("inf"))
         elif args.sort == "focal":
-            return r.get("focal_length") or 0.0
+            val = r.get("focal_length")
+            return val if val is not None else (0.0 if args.reverse else float("inf"))
         elif args.sort == "size":
             return r.get("size_bytes") or 0
         else:
             return r.get("filename", "").lower()
 
     records.sort(key=get_sort_key, reverse=args.reverse)
+
+    if args.bare:
+        limit_val = None if args.limit <= 0 else args.limit
+        print_bare(
+            records,
+            target_path=target_path,
+            sort_field=args.sort,
+            filenames_only=args.filenames,
+            with_value=args.with_value,
+            limit=limit_val,
+        )
+        return 0
 
     stats = calculate_stats(records)
 

@@ -437,6 +437,10 @@ Scans image files in the current or specified directory and extracts photographi
   - Full view: File table + Statistics dashboard.
   - `-s, --summary-only`: Print only the aggregate photographic stats dashboard.
   - `-t, --table-only`: Print only the per-file table.
+  - `-b, --bare`: Print only bare file paths (one per line, without tables or decoration) for easy copy-pasting into commands or scripts.
+  - `--shutter`: Instant shortcut to sort by shutter speed and output bare image paths (also accepts `--sort --shutter`).
+  - `--filenames`: Output only base filenames (e.g. `DSC_0001.JPG`) instead of directory paths in bare mode.
+  - `--with-value`: Print the sorted value (e.g. shutter speed, ISO) alongside each bare path.
 - **Sorting & Filtering**:
   - Sort by `--sort {name,date,iso,shutter,aperture,focal,size}` with `--reverse`.
   - Limit table rows via `--limit N` (default: `0` for all / unlimited).
@@ -450,6 +454,25 @@ Scans image files in the current or specified directory and extracts photographi
 ```bash
 # Scan current directory and print table + statistics
 td_exif_summary
+
+# Sort by shutter speed and print bare image paths (easy to copy/paste)
+td_exif_summary --shutter
+td_exif_summary --sort --shutter /path/to/photos
+
+# Sort by shutter speed from slowest/longest to fastest
+td_exif_summary --shutter --reverse
+
+# Copy fastest shutter photos to another folder
+cp $(td_exif_summary --shutter /path/to/photos | head -n 10) /destination/
+
+# Print bare filenames only
+td_exif_summary --shutter --filenames
+
+# Print shutter values alongside bare paths
+td_exif_summary --shutter --with-value
+
+# Bare output with custom sort (e.g. sorted by ISO)
+td_exif_summary --bare --sort iso
 
 # Scan a specific directory
 td_exif_summary /path/to/photos
@@ -476,6 +499,10 @@ td_exif_summary -j | jq '.summary.iso_distribution'
 | Option | Description |
 |---|---|
 | `PATH` | Target image file or directory to scan (default: current directory `.`). |
+| `-b, --bare` | Output only bare image file paths (one per line, without tables or decoration) for easy copy-pasting. |
+| `--shutter` | Sort images by shutter speed and output them bare (convenience shortcut for `--sort shutter --bare`). |
+| `--filenames` | When in bare mode, output only base filenames instead of directory paths. |
+| `--with-value` | When in bare mode, print sorted value (e.g. shutter speed, ISO) alongside each path. |
 | `-r, --recursive` | Recursively scan all subdirectories for images. |
 | `-s, --summary-only` | Display only the aggregate statistical dashboard (omit file table). |
 | `-t, --table-only` | Display only the per-file table (omit statistical dashboard). |
