@@ -422,7 +422,7 @@ def stack_frames_disk_stream(
     shape_hwc: tuple[int, int, int],
     out_dat_path: Path,
     method: str = "sigma-clip",
-    kappa: float = 2.5,
+    kappa: float = 3.5,
     chunk_size: int = 256,
     progress_callback: Any = None,
 ) -> np.memmap:
@@ -539,7 +539,7 @@ def compute_overlap_crop_bbox(
 def astro_auto_stretch(
     img_u16: np.ndarray,
     target_bg: float = 0.15,
-    shadow_clip: float = 0.92,
+    shadow_clip: float = 0.75,
     sky_ratio: float = 0.65,
     method: str = "mtf",
     boost_contrast: bool = True,
@@ -714,9 +714,9 @@ def build_parser() -> argparse.ArgumentParser:
         "-k",
         "--kappa",
         type=float,
-        default=2.5,
+        default=3.5,
         metavar="NUM",
-        help="Sigma-clipping threshold multiplier kappa (default: 2.5). Lower = more aggressive rejection.",
+        help="Sigma-clipping threshold multiplier kappa (default: 3.5). Lower = more aggressive rejection.",
     )
     parser.add_argument(
         "--crop",
@@ -768,9 +768,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--shadow-clip",
         type=float,
-        default=0.92,
+        default=0.75,
         metavar="FLOAT",
-        help="Shadow clipping factor for sky background neutralization between 0.50 and 1.0 (default: 0.92). Higher = darker sky background.",
+        help="Shadow clipping factor for sky background neutralization between 0.50 and 1.0 (default: 0.75). Higher = darker sky background.",
     )
     parser.add_argument(
         "--no-contrast-boost",

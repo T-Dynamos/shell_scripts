@@ -547,7 +547,7 @@ Outputs a **16-bit linear master TIFF** (ideal for post-processing in Siril, Pix
 - **Maximum Detail ISO Normalization**: Automatically chooses the **highest ISO frame** as the reference baseline (e.g. ISO 3200) to expose deep shadow details, Milky Way dust lanes, and faint stars. All lower ISO frames are scaled up linearly ($gain = ISO_{ref} / ISO_{i}$), boosting shadow data from clean low-ISO frames without introducing amplifier noise.
 - **Sub-Pixel Star Alignment**: High-speed SIFT feature detection and RANSAC affine registration (`cv2.estimateAffinePartial2D`) detects thousands of stars and computes rotation and sub-pixel drift without warping star shapes.
 - **Ultra-Low RAM Architecture**: Writes warped frames directly to disk memory-mapped scratch buffers (`np.memmap`) and processes row chunks (default: 256 rows). Peak RAM usage remains minimal even when stacking dozens or hundreds of high-resolution RAW frames. All temporary files are automatically cleaned up on completion.
-- **Outlier Rejection**: Configurable sigma-clipping ($\kappa = 2.5$), median, or mean stacking to remove satellite streaks, airplanes, meteors, and cosmic ray hits.
+- **Outlier Rejection**: Configurable sigma-clipping ($\kappa = 3.5$), median, or mean stacking to remove satellite streaks, airplanes, meteors, and cosmic ray hits.
 - **Auto-Cropping (`--crop`)**: Automatically calculates the overlapping bounding box where all frames intersect and crops non-overlapping borders.
 - **Auto-Stretch Preview & Viewer Integration**: Generates an 8-bit preview PNG stretched using PixInsight's standard Midtone Transfer Function (MTF) or Arcsinh stretch, and opens it directly in `swayimg` via `-p` / `--preview`.
 
@@ -586,7 +586,7 @@ td_astro_stack -s 32s -j | jq '.snr_improvement_factor'
 | `--sky-ratio FLOAT` | Vertical fraction of image from top containing sky (default: `0.65` for landscapes with horizon; use `1.0` for deep sky). |
 | `--no-iso-gain` | Disable automatic ISO exposure gain scaling. |
 | `-m, --method METHOD` | Stacking method: `sigma-clip` (default, rejects satellite trails & hot pixels), `median`, or `mean`. |
-| `-k, --kappa NUM` | Sigma-clipping threshold multiplier $\kappa$ (default: `2.5`). |
+| `-k, --kappa NUM` | Sigma-clipping threshold multiplier $\kappa$ (default: `3.5`). |
 | `--crop` | Auto-crop output to the intersection bounding box where all frames overlap. |
 | `--fast, --half-size` | Half-size processing mode for ultra-fast stacking and test previews. |
 | `--chunk-size ROWS` | Row chunk size during stacking to constrain RAM usage (default: `256` rows). |
@@ -594,7 +594,7 @@ td_astro_stack -s 32s -j | jq '.snr_improvement_factor'
 | `-o, --output FILE` | Output 16-bit master TIFF filename (default: `stack_<shutter>_<N>frames.tif`). |
 | `--stretch ALGO` | Auto-stretch algorithm for 8-bit preview PNG: `mtf` (default), `asinh`, `linear`, or `none`. |
 | `--target-bg FLOAT` | Target sky background brightness for MTF stretch (default: `0.15`). |
-| `--shadow-clip FLOAT` | Shadow clipping factor for sky background neutralization (default: `0.92`). Higher = darker sky. |
+| `--shadow-clip FLOAT` | Shadow clipping factor for sky background neutralization (default: `0.75`). Higher = darker sky. |
 | `--no-contrast-boost` | Disable S-curve contrast boost in preview image. |
 | `-p, -v, --preview` | Automatically open stretched preview in `swayimg` or default image viewer. |
 | `--dry-run` | Scan and display shutter speed groups and alignment plan without processing. |
