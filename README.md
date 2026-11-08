@@ -15,6 +15,7 @@ The scripts require Python 3 and a few desktop tools depending on the utility:
 | `wl-clipboard` (`wl-copy`) | Copying images and text to Wayland clipboard | `td_math2img` |
 | `swayimg` | Wayland-native image viewer | `td_math2img` (optional, for viewing) |
 | `exiftool` / `python-pillow` | Photographic EXIF extraction (supports RAW, DNG, NEF, JPG) | `td_exif_summary` (recommended: `exiftool`) |
+| `python-rich` | Rich terminal tables, rounded borders, and dashboard cards | `td_exif_summary` (optional, recommended) |
 | `/sys/class/power_supply/` | Linux kernel battery sysfs interface | `td_battery_info`, `td_battery_watch` |
 
 ### One-line prerequisite installation
@@ -23,27 +24,27 @@ Choose the command matching your Linux distribution:
 
 - **Arch Linux / EndeavourOS / Manjaro**:
   ```bash
-  sudo pacman -S --needed python python-matplotlib wl-clipboard swayimg perl-image-exiftool python-pillow
+  sudo pacman -S --needed python python-matplotlib wl-clipboard swayimg perl-image-exiftool python-pillow python-rich
   ```
 
 - **Debian / Ubuntu / Linux Mint**:
   ```bash
-  sudo apt-get update && sudo apt-get install -y python3 python3-matplotlib wl-clipboard swayimg libimage-exiftool-perl python3-pil
+  sudo apt-get update && sudo apt-get install -y python3 python3-matplotlib wl-clipboard swayimg libimage-exiftool-perl python3-pil python3-rich
   ```
 
 - **Fedora / RHEL**:
   ```bash
-  sudo dnf install -y python3 python3-matplotlib wl-clipboard swayimg perl-Image-ExifTool python3-pillow
+  sudo dnf install -y python3 python3-matplotlib wl-clipboard swayimg perl-Image-ExifTool python3-pillow python3-rich
   ```
 
 - **openSUSE**:
   ```bash
-  sudo zypper install -y python3 python3-matplotlib wl-clipboard swayimg exiftool python3-Pillow
+  sudo zypper install -y python3 python3-matplotlib wl-clipboard swayimg exiftool python3-Pillow python3-rich
   ```
 
 - **Void Linux**:
   ```bash
-  sudo xbps-install -Sy python3 python3-matplotlib wl-clipboard swayimg exiftool python3-Pillow
+  sudo xbps-install -Sy python3 python3-matplotlib wl-clipboard swayimg exiftool python3-Pillow python3-rich
   ```
 
 ---
@@ -418,24 +419,27 @@ td_fish_completions --dir /path/to/custom/completions
 
 ### 7. `td_exif_summary`
 
-Scans image files in the current or specified directory and extracts photographic EXIF metadata. Provides both a formatted tabular view of per-file camera settings (ISO, Shutter Speed, Aperture, Focal Length, Camera, Lens, Dimensions) and an aggregate statistical dashboard featuring ISO distribution charts, top camera lenses, aperture frequencies, and exposure spans.
+Scans image files in the current or specified directory and extracts photographic EXIF metadata. Uses **Rich** to display full, un-truncated photographic tables with rounded borders, distinct colors, and a comprehensive statistical dashboard featuring ISO distribution charts, top camera lenses, aperture frequencies, and exposure spans.
 
 #### Features
+- **Rich Terminal Tables**: Beautiful, modern tables rendered with `rich` featuring rounded borders (`box.ROUNDED`), color-coded ISO ratings, highlighted shutter speeds, and full un-truncated details.
+- **Full Photographic Info**: Shows complete filenames, camera models, lens designations, 35mm equivalent focal lengths, exposure modes (Manual, Auto, Aperture Pri, Shutter Pri), flash status, resolution, file sizes, and GPS geotags without truncation.
+- **Default Full Display**: Displays all images by default (`--limit 0` for all / unlimited) without arbitrarily truncating rows.
 - **Broad Format Support**: Seamlessly processes both standard image formats (`JPG`, `PNG`, `TIFF`, `WEBP`) and RAW camera files (`DNG`, `NEF`, `CR2`, `ARW`, etc.).
 - **Dual Engine Architecture**: Automatically leverages system `exiftool` for fast batch extraction and RAW MakerNote decoding (e.g. precise lens models), falling back to pure-Python `Pillow` when `exiftool` is not installed.
 - **Statistical Dashboard**: Computes aggregate photo statistics including:
-  - ISO range, median, mean, and visual ASCII distribution histogram.
+  - ISO range, median, mean, and visual ASCII/Rich distribution histogram.
   - Top shutter speeds and exposure times (correctly handles fractions like `1/640s` and long exposures like `32s`).
   - Top apertures ($f$-numbers) and focal lengths.
   - Date and time span of the photo shoot.
-  - Camera models and lens breakdown.
+  - Camera models, lens breakdown, and geotag percentages.
 - **Flexible Display Modes**:
   - Full view: File table + Statistics dashboard.
   - `-s, --summary-only`: Print only the aggregate photographic stats dashboard.
   - `-t, --table-only`: Print only the per-file table.
 - **Sorting & Filtering**:
   - Sort by `--sort {name,date,iso,shutter,aperture,focal,size}` with `--reverse`.
-  - Limit table rows via `--limit N` (default: 50, use `0` for unlimited).
+  - Limit table rows via `--limit N` (default: `0` for all / unlimited).
 - **Export Options**:
   - `-j, --json`: Machine-readable JSON output for scripting or metadata archival.
   - `--csv`: Export metadata to CSV for spreadsheets or data analysis.
@@ -479,7 +483,7 @@ td_exif_summary -j | jq '.summary.iso_distribution'
 | `--csv` | Output all records as CSV for spreadsheets or data analysis. |
 | `--sort FIELD` | Sort table by: `name`, `date`, `iso`, `shutter`, `aperture`, `focal`, or `size`. |
 | `--reverse` | Reverse the sort order. |
-| `--limit N` | Maximum rows to display in table (default: `50`, use `0` for unlimited). |
+| `--limit N` | Maximum rows to display in table (default: `0` for all / unlimited). |
 | `--engine ENGINE` | EXIF extraction engine: `auto` (default), `exiftool`, or `pillow`. |
 | `--no-color` | Disable ANSI colored output. |
 
