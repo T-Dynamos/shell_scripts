@@ -444,10 +444,11 @@ Scans image files in the current or specified directory and extracts photographi
   - Full view: File table + Statistics dashboard.
   - `-s, --summary-only`: Print only the aggregate photographic stats dashboard.
   - `-t, --table-only`: Print only the per-file table.
-  - `-b, --bare`: Print only bare file paths (one per line, without tables or decoration) for easy copy-pasting into commands or scripts.
-  - `--shutter`: Instant shortcut to sort by shutter speed and output bare image paths (also accepts `--sort --shutter`).
-  - `--filenames`: Output only base filenames (e.g. `DSC_0001.JPG`) instead of directory paths in bare mode.
+  - `-b, --bare`: Print only bare file paths (one per line, with trailing `\` shell line continuation) for easy copy-pasting directly into multi-line commands.
+  - `--shutter`: Instant shortcut to sort by shutter speed and output bare image paths with trailing `\` (also accepts `--sort --shutter`).
+  - `--filenames`: Output only base filenames (e.g. `DSC_0001.JPG \`) instead of directory paths in bare mode.
   - `--with-value`: Print the sorted value (e.g. shutter speed, ISO) alongside each bare path.
+  - `--no-slash`: Omit the trailing `\` line continuation in bare mode.
 - **Sorting & Filtering**:
   - Sort by `--sort {name,date,iso,shutter,aperture,focal,size}` with `--reverse`.
   - Limit table rows via `--limit N` (default: `0` for all / unlimited).
@@ -511,10 +512,11 @@ td_exif_summary -j | jq '.summary.iso_distribution'
 | `--camera` | Include Camera model column in table (omitted by default). |
 | `--mode` | Include Exposure Mode column in table (omitted by default). |
 | `--flash` | Include Flash status column in table (omitted by default). |
-| `-b, --bare` | Output only bare image file paths (one per line, without tables or decoration) for easy copy-pasting. |
-| `--shutter` | Sort images by shutter speed and output them bare (convenience shortcut for `--sort shutter --bare`). |
+| `-b, --bare` | Output only bare image file paths (one per line, with trailing `\` shell line continuation) for easy copy-pasting. |
+| `--shutter` | Sort images by shutter speed and output them bare with trailing `\` (convenience shortcut for `--sort shutter --bare`). |
 | `--filenames` | When in bare mode, output only base filenames instead of directory paths. |
 | `--with-value` | When in bare mode, print sorted value (e.g. shutter speed, ISO) alongside each path. |
+| `--no-slash` | Omit the trailing shell line-continuation backslash (`\`) in bare mode. |
 | `-r, --recursive` | Recursively scan all subdirectories for images. |
 | `-s, --summary-only` | Display only the aggregate statistical dashboard (omit file table). |
 | `-t, --table-only` | Display only the per-file table (omit statistical dashboard). |

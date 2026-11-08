@@ -1056,22 +1056,27 @@ def print_bare(
     filenames_only: bool = False,
     with_value: bool = False,
     limit: int | None = None,
+    backslash: bool = True,
 ) -> None:
     """Print bare list of image files/paths, one per line, suitable for copy-pasting."""
+    import shlex
     shown = records[:limit] if (limit and limit > 0) else records
     is_curr_dir = (target_path.resolve() == Path(".").resolve())
 
     for r in shown:
         if filenames_only:
-            out_str = r["filename"]
+            raw_path = r["filename"]
         elif is_curr_dir:
             try:
                 rel = os.path.relpath(r["path"], start=".")
-                out_str = rel if not rel.startswith("./") else rel[2:]
+                raw_path = rel if not rel.startswith("./") else rel[2:]
             except ValueError:
-                out_str = r["filename"]
+                raw_path = r["filename"]
         else:
-            out_str = r["path"]
+            raw_path = r["path"]
+
+        quoted_path = shlex.quote(raw_path)
+        out_str = f"{quoted_path} \\" if backslash else quoted_path
 
         if with_value:
             if sort_field == "shutter":
@@ -1219,6 +1224,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="When in bare mode, print the sorted value (e.g. shutter speed, ISO) alongside each file path.",
     )
     parser.add_argument(
+        "--no-slash",
+        "--no-backslash",
+        dest="backslash",
+        action="store_false",
+        default=True,
+        help="Omit the trailing shell line-continuation backslash (' \\') in bare mode.",
+    )
+    parser.add_argument(
         "--sort",
         choices=["name", "date", "iso", "shutter", "aperture", "focal", "size"],
         default="name",
@@ -1316,6 +1329,7 @@ def main() -> int:
             filenames_only=args.filenames,
             with_value=args.with_value,
             limit=limit_val,
+            backslash=args.backslash,
         )
         return 0
 
