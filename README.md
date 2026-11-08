@@ -583,7 +583,7 @@ td_astro_stack -s 32s -j | jq '.snr_improvement_factor'
 | `--ref-mode MODE` | Reference frame selection strategy: `highest` (default: highest ISO reveals maximum shadow detail & dynamic range), `median`, or `lowest`. |
 | `--align MODE` | Transform mode: `rigid` (Euclidean rotation + translation, default), `homography`, or `none`. |
 | `--align-target TARGET` | Feature registration focus: `stars` (default: isolates sky stars for maximum Milky Way sharpness & contrast), `ground` (aligns stationary monastery/terrain), or `full`. |
-| `--sky-ratio FLOAT` | Vertical fraction of image from top containing sky (default: `0.65` for landscapes with horizon; use `1.0` for deep sky). |
+| `--sky-ratio FLOAT` | Vertical fraction of image from top containing sky (default: `0.50` for landscapes with horizon; use `1.0` for deep sky). |
 | `--no-iso-gain` | Disable automatic ISO exposure gain scaling. |
 | `-m, --method METHOD` | Stacking method: `sigma-clip` (default, rejects satellite trails & hot pixels), `median`, or `mean`. |
 | `-k, --kappa NUM` | Sigma-clipping threshold multiplier $\kappa$ (default: `3.5`). |

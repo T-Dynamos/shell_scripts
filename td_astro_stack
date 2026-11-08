@@ -546,7 +546,7 @@ def astro_auto_stretch(
     img_u16: np.ndarray,
     target_bg: float = 0.15,
     shadow_clip: float = 0.75,
-    sky_ratio: float = 0.65,
+    sky_ratio: float = 0.50,
     method: str = "mtf",
     boost_contrast: bool = True,
 ) -> np.ndarray:
@@ -698,9 +698,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sky-ratio",
         type=float,
-        default=0.65,
+        default=0.50,
         metavar="FLOAT",
-        help="Vertical fraction of the image from the top containing sky (default: 0.65 for landscapes with horizon/monastery; use 1.0 for deep sky).",
+        help="Vertical fraction of the image from the top containing sky (default: 0.50 for landscapes with horizon/monastery; use 1.0 for deep sky).",
     )
     parser.add_argument(
         "--no-iso-gain",
@@ -1091,12 +1091,10 @@ def main() -> int:
                     console.print(f"[bold red]Failed loading {fname}: {e}[/bold red]")
                 continue
 
-            # Digital gain scaling
-            curr_scaled = curr_img * gain
-            del curr_img
-            gc.collect()
-
             if args.align == "none":
+                curr_scaled = curr_img * gain
+                del curr_img
+                gc.collect()
                 M = np.eye(2, 3, dtype=np.float32)
                 warped = curr_scaled
                 mask = np.ones((h, w), dtype=np.uint8)
@@ -1106,11 +1104,11 @@ def main() -> int:
                 M = None
                 matches_count, inliers_count, dx, dy, theta = 0, 0, 0.0, 0.0, 0.0
 
-                # Primary: Astroalign asterism matching for stellar fields
+                # Primary: Astroalign asterism matching on unamplified raw green channel
                 if HAS_ASTROALIGN and args.align_target == "stars" and ref_sky is not None:
                     try:
-                        curr_sky = np.ascontiguousarray(curr_scaled[:split_y, :, 1], dtype=np.float64)
-                        t, (s_pos, t_pos) = aa.find_transform(curr_sky, ref_sky, max_control_points=70, detection_sigma=3.0)
+                        curr_sky = np.ascontiguousarray(curr_img[:split_y, :, 1], dtype=np.float64)
+                        t, (s_pos, t_pos) = aa.find_transform(curr_sky, ref_sky, max_control_points=100, detection_sigma=4.0)
                         inliers_count = len(s_pos)
                         matches_count = len(s_pos)
                         dx = float(t.translation[0])
@@ -1123,6 +1121,11 @@ def main() -> int:
                             M = t.params[:2, :].astype(np.float32)
                     except Exception:
                         M = None
+
+                # Digital gain scaling applied after clean star registration
+                curr_scaled = curr_img * gain
+                del curr_img
+                gc.collect()
 
                 # Fallback to OpenCV SIFT if Astroalign failed or target is ground
                 if M is None or inliers_count < 4:
