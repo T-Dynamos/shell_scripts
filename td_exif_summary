@@ -1,0 +1,871 @@
+#!/usr/bin/env python3
+"""td_exif_summary - Camera EXIF Metadata Scanner & Photographic Statistics.
+
+Scans image files (JPEG, PNG, DNG, NEF, CR2, ARW, TIFF, WEBP) in the current
+or specified directory, extracts photographic EXIF metadata (ISO, Shutter Speed,
+Aperture, Focal Length, Camera, Lens, Exposure Compensation, Dimensions),
+and displays a rich tabular summary and photographic statistics dashboard.
+
+Author: Ansh Dadwal (T-Dynamos) & Antigravity
+License: MIT
+"""
+
+import os
+import sys
+import glob
+import json
+import shutil
+import argparse
+import subprocess
+from pathlib import Path
+from datetime import datetime
+from collections import Counter
+from statistics import median, mean
+
+try:
+    from PIL import Image, ExifTags
+    HAS_PILLOW = True
+except ImportError:
+    HAS_PILLOW = False
+
+IMAGE_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff",
+    ".dng", ".nef", ".cr2", ".cr3", ".arw", ".raw", ".orf", ".rw2", ".pef"
+}
+
+
+def parse_shutter_seconds(val) -> float | None:
+    """Parse exposure time string or number into seconds as float."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val) if val > 0 else None
+    s = str(val).strip().rstrip("s")
+    if "/" in s:
+        parts = s.split("/")
+        if len(parts) == 2:
+            try:
+                num = float(parts[0])
+                denom = float(parts[1])
+                return (num / denom) if denom != 0 else None
+            except ValueError:
+                return None
+    try:
+        f = float(s)
+        return f if f > 0 else None
+    except ValueError:
+        return None
+
+
+def format_shutter(sec: float | None, orig_str: str | None = None) -> str:
+    """Format exposure time in seconds to standard photography notation (e.g. 1/250s, 32s)."""
+    if sec is None:
+        if orig_str:
+            s = str(orig_str).strip()
+            return f"{s}s" if not s.endswith("s") else s
+        return "N/A"
+    if sec < 0.3:
+        denom = round(1.0 / sec)
+        return f"1/{denom}s"
+    elif sec == int(sec):
+        return f"{int(sec)}s"
+    else:
+        return f"{sec:.1f}s"
+
+
+def format_aperture(fnum: float | None) -> str:
+    """Format f-number to standard notation (e.g. f/2.8, f/8.0)."""
+    if fnum is None or fnum <= 0:
+        return "N/A"
+    return f"f/{fnum:.1f}" if fnum % 1 != 0 else f"f/{int(fnum)}"
+
+
+def format_focal(focal: float | None, focal_35mm: int | None = None) -> str:
+    """Format focal length (e.g. 70mm or 70mm (105mm eq))."""
+    if focal is None or focal <= 0:
+        return "N/A"
+    base = f"{focal:.1f}mm" if (focal % 1 != 0 and focal < 10) else f"{int(round(focal))}mm"
+    if focal_35mm and focal_35mm > 0 and abs(focal_35mm - focal) > 1:
+        return f"{base} ({focal_35mm}mm eq)"
+    return base
+
+
+def format_ev(ev: float | None) -> str:
+    """Format exposure bias value in EV (e.g. +0.0 EV, -0.7 EV)."""
+    if ev is None:
+        return "N/A"
+    sign = "+" if ev > 0 else ""
+    return f"{sign}{ev:.1f} EV"
+
+
+def format_bytes(bytes_count: int | None) -> str:
+    """Format file size in human readable units."""
+    if bytes_count is None or bytes_count < 0:
+        return "N/A"
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if bytes_count < 1024.0 or unit == "TB":
+            return f"{bytes_count:.1f} {unit}" if unit in ["MB", "GB", "TB"] else f"{int(bytes_count)} {unit}"
+        bytes_count /= 1024.0
+    return f"{bytes_count:.1f} MB"
+
+
+def format_span(td) -> str:
+    """Format a timedelta span into human-readable duration."""
+    total_sec = int(td.total_seconds())
+    if total_sec < 60:
+        return f"{total_sec}s"
+    minutes = total_sec // 60
+    if minutes < 60:
+        rem_sec = total_sec % 60
+        return f"{minutes}m {rem_sec}s" if rem_sec else f"{minutes}m"
+    hours = minutes // 60
+    rem_min = minutes % 60
+    if hours < 24:
+        return f"{hours}h {rem_min}m" if rem_min else f"{hours}h"
+    days = hours // 24
+    rem_hours = hours % 24
+    return f"{days}d {rem_hours}h" if rem_hours else f"{days}d"
+
+
+def make_bar(ratio: float, width: int = 15) -> str:
+    """Render a horizontal progress bar."""
+    filled = int(round(ratio * width))
+    filled = max(0, min(width, filled))
+    return "█" * filled + "░" * (width - filled)
+
+
+def normalize_datetime(dt_str: str | None) -> tuple[str | None, datetime | None]:
+    """Parse EXIF date string (YYYY:MM:DD HH:MM:SS) into normalized ISO string and datetime."""
+    if not dt_str:
+        return None, None
+    s = str(dt_str).strip()
+    # Replace initial date colons with dashes: 2026:10:15 17:11:12 -> 2026-10-15 17:11:12
+    if len(s) >= 10 and s[4] == ":" and s[7] == ":":
+        s = s[:4] + "-" + s[5:7] + "-" + s[8:]
+    try:
+        # Try parsing ISO or standard formats
+        cleaned = s.replace("T", " ")
+        if "+" in cleaned:
+            cleaned = cleaned.split("+")[0].strip()
+        dt = datetime.strptime(cleaned[:19], "%Y-%m-%d %H:%M:%S")
+        return dt.strftime("%Y-%m-%d %H:%M:%S"), dt
+    except Exception:
+        return s, None
+
+
+def extract_with_exiftool(targets: list[str], recursive: bool = False) -> list[dict]:
+    """Extract EXIF metadata from targets using exiftool."""
+    exiftool_bin = shutil.which("exiftool")
+    if not exiftool_bin:
+        return []
+
+    cmd = [
+        exiftool_bin,
+        "-q",
+        "-j",
+        "-fast",
+        "-FileName",
+        "-Directory",
+        "-FileSize#",
+        "-Make",
+        "-Model",
+        "-Lens",
+        "-LensModel",
+        "-ISO",
+        "-ExposureTime",
+        "-FNumber",
+        "-FocalLength",
+        "-FocalLengthIn35mmFormat",
+        "-ExposureCompensation",
+        "-DateTimeOriginal",
+        "-ImageWidth",
+        "-ImageHeight",
+    ]
+    if recursive:
+        cmd.append("-r")
+
+    # Add file extension filters to avoid scanning non-images
+    for ext in IMAGE_EXTENSIONS:
+        cmd.extend(["-ext", ext.lstrip(".")])
+
+    cmd.extend(targets)
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if proc.returncode != 0 and not proc.stdout.strip():
+            return []
+        raw_items = json.loads(proc.stdout)
+    except Exception:
+        return []
+
+    results = []
+    for item in raw_items:
+        src = item.get("SourceFile", "")
+        fname = item.get("FileName") or os.path.basename(src)
+        dir_path = item.get("Directory") or os.path.dirname(src)
+        full_path = os.path.join(dir_path, fname) if (dir_path and fname) else src
+
+        iso_val = item.get("ISO")
+        try:
+            iso = int(iso_val) if iso_val is not None else None
+        except (ValueError, TypeError):
+            iso = None
+
+        raw_shutter = item.get("ExposureTime")
+        shutter_sec = parse_shutter_seconds(raw_shutter)
+
+        raw_fnum = item.get("FNumber")
+        try:
+            fnum = float(raw_fnum) if raw_fnum is not None else None
+        except (ValueError, TypeError):
+            fnum = None
+
+        raw_focal = item.get("FocalLength")
+        try:
+            if isinstance(raw_focal, str):
+                raw_focal = raw_focal.replace("mm", "").strip()
+            focal = float(raw_focal) if raw_focal is not None else None
+        except (ValueError, TypeError):
+            focal = None
+
+        raw_focal35 = item.get("FocalLengthIn35mmFormat")
+        try:
+            if isinstance(raw_focal35, str):
+                raw_focal35 = raw_focal35.replace("mm", "").strip()
+            focal_35 = int(round(float(raw_focal35))) if raw_focal35 is not None else None
+        except (ValueError, TypeError):
+            focal_35 = None
+
+        raw_ev = item.get("ExposureCompensation")
+        try:
+            ev = float(raw_ev) if raw_ev is not None else None
+        except (ValueError, TypeError):
+            ev = None
+
+        raw_size = item.get("FileSize")
+        try:
+            fsize = int(raw_size) if raw_size is not None else (os.path.getsize(full_path) if os.path.isfile(full_path) else None)
+        except Exception:
+            fsize = None
+
+        w = item.get("ImageWidth")
+        h = item.get("ImageHeight")
+        try:
+            w = int(w) if w else None
+            h = int(h) if h else None
+            mp = round((w * h) / 1_000_000, 1) if (w and h) else None
+        except Exception:
+            w, h, mp = None, None, None
+
+        dt_norm, dt_obj = normalize_datetime(item.get("DateTimeOriginal"))
+
+        lens = item.get("Lens") or item.get("LensModel")
+        make = item.get("Make")
+        model = item.get("Model")
+
+        results.append({
+            "path": full_path,
+            "filename": fname,
+            "directory": dir_path,
+            "size_bytes": fsize,
+            "make": make.strip() if make else None,
+            "model": model.strip() if model else None,
+            "lens": lens.strip() if lens else None,
+            "datetime_str": dt_norm,
+            "datetime_obj": dt_obj,
+            "iso": iso,
+            "shutter_sec": shutter_sec,
+            "shutter_str": format_shutter(shutter_sec, raw_shutter),
+            "f_number": fnum,
+            "focal_length": focal,
+            "focal_length_35mm": focal_35,
+            "exposure_bias": ev,
+            "width": w,
+            "height": h,
+            "megapixels": mp,
+            "has_exif": any(v is not None for v in [iso, shutter_sec, fnum, model]),
+        })
+
+    return results
+
+
+def extract_with_pillow(file_paths: list[str]) -> list[dict]:
+    """Extract EXIF metadata using pure-Python Pillow as a standalone engine."""
+    if not HAS_PILLOW:
+        return []
+
+    results = []
+    for p in file_paths:
+        fname = os.path.basename(p)
+        dir_path = os.path.dirname(p)
+        fsize = os.path.getsize(p) if os.path.isfile(p) else None
+
+        try:
+            with Image.open(p) as img:
+                w, h = img.size
+                mp = round((w * h) / 1_000_000, 1)
+
+                exif = img.getexif()
+                ifd = exif.get_ifd(ExifTags.IFD.Exif) if exif else {}
+
+                make = exif.get(ExifTags.Base.Make)
+                model = exif.get(ExifTags.Base.Model)
+                raw_dt = ifd.get(ExifTags.Base.DateTimeOriginal) or exif.get(ExifTags.Base.DateTime)
+                dt_norm, dt_obj = normalize_datetime(str(raw_dt) if raw_dt else None)
+
+                iso_raw = ifd.get(ExifTags.Base.ISOSpeedRatings) or exif.get(ExifTags.Base.ISOSpeedRatings)
+                try:
+                    iso = int(iso_raw) if iso_raw is not None else None
+                except Exception:
+                    iso = None
+
+                shutter_raw = ifd.get(ExifTags.Base.ExposureTime)
+                shutter_sec = parse_shutter_seconds(shutter_raw)
+
+                fnum_raw = ifd.get(ExifTags.Base.FNumber)
+                try:
+                    fnum = float(fnum_raw) if fnum_raw is not None else None
+                except Exception:
+                    fnum = None
+
+                focal_raw = ifd.get(ExifTags.Base.FocalLength)
+                try:
+                    focal = float(focal_raw) if focal_raw is not None else None
+                except Exception:
+                    focal = None
+
+                focal35_raw = ifd.get(ExifTags.Base.FocalLengthIn35mmFilm)
+                try:
+                    focal35 = int(round(float(focal35_raw))) if focal35_raw is not None else None
+                except Exception:
+                    focal35 = None
+
+                lens_raw = ifd.get(ExifTags.Base.LensModel) or ifd.get(ExifTags.Base.LensSpecification)
+                lens = str(lens_raw).strip() if lens_raw else None
+
+                ev_raw = ifd.get(ExifTags.Base.ExposureBiasValue)
+                try:
+                    ev = float(ev_raw) if ev_raw is not None else None
+                except Exception:
+                    ev = None
+
+                results.append({
+                    "path": p,
+                    "filename": fname,
+                    "directory": dir_path,
+                    "size_bytes": fsize,
+                    "make": str(make).strip() if make else None,
+                    "model": str(model).strip() if model else None,
+                    "lens": lens,
+                    "datetime_str": dt_norm,
+                    "datetime_obj": dt_obj,
+                    "iso": iso,
+                    "shutter_sec": shutter_sec,
+                    "shutter_str": format_shutter(shutter_sec, shutter_raw),
+                    "f_number": fnum,
+                    "focal_length": focal,
+                    "focal_length_35mm": focal35,
+                    "exposure_bias": ev,
+                    "width": w,
+                    "height": h,
+                    "megapixels": mp,
+                    "has_exif": any(v is not None for v in [iso, shutter_sec, fnum, model]),
+                })
+        except Exception:
+            results.append({
+                "path": p,
+                "filename": fname,
+                "directory": dir_path,
+                "size_bytes": fsize,
+                "make": None,
+                "model": None,
+                "lens": None,
+                "datetime_str": None,
+                "datetime_obj": None,
+                "iso": None,
+                "shutter_sec": None,
+                "shutter_str": "N/A",
+                "f_number": None,
+                "focal_length": None,
+                "focal_length_35mm": None,
+                "exposure_bias": None,
+                "width": None,
+                "height": None,
+                "megapixels": None,
+                "has_exif": False,
+            })
+
+    return results
+
+
+def find_files(targets: list[str], recursive: bool = False) -> list[str]:
+    """Find all image files matching target paths or directories."""
+    files = []
+    for t in targets:
+        p = Path(t).resolve()
+        if p.is_file():
+            if p.suffix.lower() in IMAGE_EXTENSIONS:
+                files.append(str(p))
+        elif p.is_dir():
+            pattern = "**/*" if recursive else "*"
+            for item in p.glob(pattern):
+                if item.is_file() and item.suffix.lower() in IMAGE_EXTENSIONS:
+                    files.append(str(item))
+    return sorted(set(files))
+
+
+def calculate_stats(records: list[dict]) -> dict:
+    """Calculate aggregate statistics from photo records."""
+    total_images = len(records)
+    exif_images = [r for r in records if r["has_exif"]]
+    total_size = sum(r["size_bytes"] or 0 for r in records)
+
+    # Date calculations
+    dates = [r["datetime_obj"] for r in exif_images if r.get("datetime_obj")]
+    earliest_date = min(dates) if dates else None
+    latest_date = max(dates) if dates else None
+    span = (latest_date - earliest_date) if (earliest_date and latest_date) else None
+
+    # Cameras and Lenses
+    cameras = Counter(r["model"] for r in exif_images if r.get("model"))
+    lenses = Counter(r["lens"] for r in exif_images if r.get("lens"))
+
+    # ISO stats
+    isos = [r["iso"] for r in exif_images if r.get("iso") is not None]
+    iso_stats = {}
+    if isos:
+        iso_counts = Counter(isos)
+        iso_stats = {
+            "min": min(isos),
+            "max": max(isos),
+            "median": int(median(isos)),
+            "mean": round(mean(isos)),
+            "counts": dict(sorted(iso_counts.items())),
+        }
+
+    # Shutter stats
+    shutters = [r["shutter_sec"] for r in exif_images if r.get("shutter_sec") is not None]
+    shutter_strings = Counter(r["shutter_str"] for r in exif_images if r.get("shutter_str") and r["shutter_str"] != "N/A")
+    shutter_stats = {}
+    if shutters:
+        shutter_stats = {
+            "fastest_sec": min(shutters),
+            "fastest_str": format_shutter(min(shutters)),
+            "slowest_sec": max(shutters),
+            "slowest_str": format_shutter(max(shutters)),
+            "median_str": format_shutter(median(shutters)),
+            "top_counts": shutter_strings.most_common(8),
+        }
+
+    # Aperture stats
+    fnums = [r["f_number"] for r in exif_images if r.get("f_number") is not None]
+    fnum_strings = Counter(format_aperture(r["f_number"]) for r in exif_images if r.get("f_number") is not None)
+    aperture_stats = {}
+    if fnums:
+        aperture_stats = {
+            "widest": format_aperture(min(fnums)),
+            "narrowest": format_aperture(max(fnums)),
+            "median": format_aperture(median(fnums)),
+            "top_counts": fnum_strings.most_common(8),
+        }
+
+    # Focal length stats
+    focals = [r["focal_length"] for r in exif_images if r.get("focal_length") is not None]
+    focal_strings = Counter(format_focal(r["focal_length"]) for r in exif_images if r.get("focal_length") is not None)
+    focal_stats = {}
+    if focals:
+        focal_stats = {
+            "shortest": format_focal(min(focals)),
+            "longest": format_focal(max(focals)),
+            "median": format_focal(median(focals)),
+            "top_counts": focal_strings.most_common(8),
+        }
+
+    return {
+        "total_images": total_images,
+        "images_with_exif": len(exif_images),
+        "total_size_bytes": total_size,
+        "total_size_formatted": format_bytes(total_size),
+        "earliest_date": earliest_date.strftime("%Y-%m-%d %H:%M:%S") if earliest_date else None,
+        "latest_date": latest_date.strftime("%Y-%m-%d %H:%M:%S") if latest_date else None,
+        "date_span": format_span(span) if span else None,
+        "cameras": dict(cameras.most_common()),
+        "lenses": dict(lenses.most_common()),
+        "iso": iso_stats,
+        "shutter": shutter_stats,
+        "aperture": aperture_stats,
+        "focal_length": focal_stats,
+    }
+
+
+def print_table(records: list[dict], use_color: bool = True, limit: int | None = None) -> None:
+    """Print clean aligned table of photo records."""
+    bold = "\033[1m" if use_color else ""
+    cyan = "\033[36m" if use_color else ""
+    green = "\033[32m" if use_color else ""
+    yellow = "\033[33m" if use_color else ""
+    magenta = "\033[35m" if use_color else ""
+    dim = "\033[2m" if use_color else ""
+    reset = "\033[0m" if use_color else ""
+
+    headers = [
+        f"{bold}#{reset}",
+        f"{bold}FILE{reset}",
+        f"{bold}DATE / TIME{reset}",
+        f"{bold}CAMERA{reset}",
+        f"{bold}LENS / FOCAL{reset}",
+        f"{bold}SHUTTER{reset}",
+        f"{bold}F-STOP{reset}",
+        f"{bold}ISO{reset}",
+        f"{bold}EV{reset}",
+        f"{bold}RESOLUTION{reset}",
+    ]
+
+    shown = records[:limit] if limit else records
+
+    # Column widths
+    col_w = [4, 18, 19, 16, 18, 9, 7, 7, 8, 18]
+
+    # Print header
+    header_line = (
+        f"{'#':<4}  {'FILE':<18}  {'DATE / TIME':<19}  {'CAMERA':<16}  "
+        f"{'LENS / FOCAL':<18}  {'SHUTTER':<9}  {'F-STOP':<7}  {'ISO':<7}  {'EV':<8}  {'RESOLUTION':<18}"
+    )
+    print(f"\n{bold}{header_line}{reset}")
+    print("-" * len(header_line))
+
+    for idx, r in enumerate(shown, 1):
+        idx_str = f"{dim}{idx:>3}{reset}"
+        fname = (r["filename"][:16] + "..") if len(r["filename"]) > 18 else r["filename"]
+        fname_str = f"{cyan}{fname:<18}{reset}"
+
+        dt_str = f"{dim}{r['datetime_str'] or 'N/A':<19}{reset}"
+
+        cam = r["model"] or "N/A"
+        cam_short = (cam[:14] + "..") if len(cam) > 16 else cam
+        cam_str = f"{cam_short:<16}"
+
+        # Lens or focal
+        lens = r["lens"] or format_focal(r["focal_length"])
+        lens_short = (lens[:16] + "..") if len(lens) > 18 else lens
+        lens_str = f"{dim}{lens_short:<18}{reset}"
+
+        # Shutter
+        shut = r["shutter_str"]
+        shut_str = f"{yellow}{shut:<9}{reset}"
+
+        # Aperture
+        fnum = format_aperture(r["f_number"])
+        fnum_str = f"{green}{fnum:<7}{reset}"
+
+        # ISO with color code
+        iso = r["iso"]
+        if iso is not None:
+            if iso <= 400:
+                iso_color = green
+            elif iso <= 1600:
+                iso_color = yellow
+            else:
+                iso_color = magenta
+            iso_str = f"{iso_color}{iso:<7}{reset}"
+        else:
+            iso_str = f"{dim}{'N/A':<7}{reset}"
+
+        # EV
+        ev = format_ev(r["exposure_bias"])
+        ev_str = f"{dim}{ev:<8}{reset}"
+
+        # Resolution
+        if r["width"] and r["height"]:
+            res_val = f"{r['width']}x{r['height']}"
+            if r["megapixels"]:
+                res_val += f" ({r['megapixels']}MP)"
+        else:
+            res_val = "N/A"
+        res_str = f"{dim}{res_val:<18}{reset}"
+
+        print(f"{idx_str}  {fname_str}  {dt_str}  {cam_str}  {lens_str}  {shut_str}  {fnum_str}  {iso_str}  {ev_str}  {res_str}")
+
+    if limit and len(records) > limit:
+        print(f"{dim}... and {len(records) - limit} more images (use --limit 0 to display all){reset}")
+
+
+def print_dashboard(stats: dict, target_label: str, use_color: bool = True) -> None:
+    """Print photographic summary dashboard with charts and breakdowns."""
+    bold = "\033[1m" if use_color else ""
+    cyan = "\033[36m" if use_color else ""
+    green = "\033[32m" if use_color else ""
+    yellow = "\033[33m" if use_color else ""
+    magenta = "\033[35m" if use_color else ""
+    dim = "\033[2m" if use_color else ""
+    reset = "\033[0m" if use_color else ""
+
+    print(f"\n{bold}================================================================================{reset}")
+    print(f"{bold}                 EXIF Photographic Summary: {cyan}{target_label}{reset}")
+    print(f"{bold}================================================================================{reset}")
+
+    total = stats["total_images"]
+    with_exif = stats["images_with_exif"]
+    size_str = stats["total_size_formatted"]
+
+    print(f"{bold}Images Analyzed  :{reset} {total} files ({with_exif} with EXIF metadata) [{size_str} total]")
+    if stats["earliest_date"] and stats["latest_date"]:
+        span_str = f" (Span: {stats['date_span']})" if stats['date_span'] else ""
+        print(f"{bold}Date Range       :{reset} {stats['earliest_date']}  ->  {stats['latest_date']}{span_str}")
+
+    # Cameras
+    if stats["cameras"]:
+        print(f"\n{bold}Cameras Used:{reset}")
+        for cam, count in stats["cameras"].items():
+            pct = (count / total) * 100
+            print(f"  • {bold}{cam:<28}{reset} {count:>3} photos ({pct:>5.1f}%)")
+
+    # Lenses
+    if stats["lenses"]:
+        print(f"\n{bold}Lenses Used:{reset}")
+        for lens, count in stats["lenses"].items():
+            pct = (count / total) * 100
+            print(f"  • {bold}{lens:<28}{reset} {count:>3} photos ({pct:>5.1f}%)")
+
+    # Exposure ranges summary
+    print(f"\n{bold}Exposure Settings Overview:{reset}")
+    if stats["iso"]:
+        iso_s = stats["iso"]
+        print(f"  • {bold}ISO Range    :{reset} Min: {green}ISO {iso_s['min']}{reset}  |  Max: {magenta}ISO {iso_s['max']}{reset}  |  Median: {yellow}ISO {iso_s['median']}{reset}")
+
+    if stats["shutter"]:
+        sh_s = stats["shutter"]
+        print(f"  • {bold}Shutter Range:{reset} Fastest: {yellow}{sh_s['fastest_str']}{reset}  |  Slowest: {yellow}{sh_s['slowest_str']}{reset}  |  Median: {yellow}{sh_s['median_str']}{reset}")
+
+    if stats["aperture"]:
+        ap_s = stats["aperture"]
+        print(f"  • {bold}Aperture     :{reset} Widest: {green}{ap_s['widest']}{reset}  |  Narrowest: {green}{ap_s['narrowest']}{reset}  |  Median: {green}{ap_s['median']}{reset}")
+
+    if stats["focal_length"]:
+        fl_s = stats["focal_length"]
+        print(f"  • {bold}Focal Length :{reset} Widest: {fl_s['shortest']}  |  Longest: {fl_s['longest']}  |  Median: {fl_s['median']}")
+
+    # ISO Breakdown Bar Chart
+    if stats["iso"] and stats["iso"].get("counts"):
+        print(f"\n{bold}ISO Distribution:{reset}")
+        counts = stats["iso"]["counts"]
+        for iso_val, count in counts.items():
+            pct = (count / total) * 100
+            ratio = count / total
+            bar = make_bar(ratio, width=20)
+            iso_color = green if iso_val <= 400 else (yellow if iso_val <= 1600 else magenta)
+            print(f"  ISO {iso_color}{iso_val:<5}{reset} : {count:>3} photos ({pct:>5.1f}%)  [{cyan}{bar}{reset}]")
+
+    # Top shutter speeds
+    if stats["shutter"] and stats["shutter"].get("top_counts"):
+        top_sh = ", ".join(f"{s} ({c})" for s, c in stats["shutter"]["top_counts"])
+        print(f"\n{bold}Top Shutter Speeds:{reset}\n  {top_sh}")
+
+    # Top apertures
+    if stats["aperture"] and stats["aperture"].get("top_counts"):
+        top_ap = ", ".join(f"{a} ({c})" for a, c in stats["aperture"]["top_counts"])
+        print(f"\n{bold}Top Apertures:{reset}\n  {top_ap}")
+
+    # Top focal lengths
+    if stats["focal_length"] and stats["focal_length"].get("top_counts"):
+        top_fl = ", ".join(f"{f} ({c})" for f, c in stats["focal_length"]["top_counts"])
+        print(f"\n{bold}Top Focal Lengths:{reset}\n  {top_fl}")
+
+    print("")
+
+
+def print_csv(records: list[dict]) -> None:
+    """Print photo records in CSV format."""
+    import csv
+    writer = csv.writer(sys.stdout)
+    writer.writerow([
+        "filename", "directory", "datetime", "make", "model", "lens",
+        "iso", "shutter_seconds", "shutter_string", "f_number",
+        "focal_length", "focal_length_35mm", "exposure_bias",
+        "width", "height", "megapixels", "file_size_bytes"
+    ])
+    for r in records:
+        writer.writerow([
+            r["filename"], r["directory"], r["datetime_str"] or "",
+            r["make"] or "", r["model"] or "", r["lens"] or "",
+            r["iso"] or "", r["shutter_sec"] or "", r["shutter_str"],
+            r["f_number"] or "", r["focal_length"] or "",
+            r["focal_length_35mm"] or "", r["exposure_bias"] or "",
+            r["width"] or "", r["height"] or "", r["megapixels"] or "",
+            r["size_bytes"] or ""
+        ])
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Construct CLI argument parser for td_exif_summary."""
+    parser = argparse.ArgumentParser(
+        prog="td_exif_summary",
+        description="Scan images and summarize photographic EXIF data (ISO, Shutter, Aperture, Lenses).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  %(prog)s
+  %(prog)s /path/to/photos
+  %(prog)s -r /run/media/tdynamos/Secondary/Pictures
+  %(prog)s --summary-only
+  %(prog)s --sort iso --reverse
+  %(prog)s --json
+  %(prog)s --csv > photos.csv
+""",
+    )
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        metavar="PATH",
+        help="Target image file or directory to scan (default: current directory '.').",
+    )
+    parser.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="Recursively scan all subdirectories for images.",
+    )
+    parser.add_argument(
+        "-s",
+        "--summary-only",
+        action="store_true",
+        help="Display only the aggregate statistical dashboard (omit the per-file table).",
+    )
+    parser.add_argument(
+        "-t",
+        "--table-only",
+        action="store_true",
+        help="Display only the per-file table (omit the aggregate statistics dashboard).",
+    )
+    parser.add_argument(
+        "-j",
+        "--json",
+        action="store_true",
+        help="Output all records and summary statistics in JSON format.",
+    )
+    parser.add_argument(
+        "--csv",
+        action="store_true",
+        help="Output all records as CSV for spreadsheets or data analysis.",
+    )
+    parser.add_argument(
+        "--sort",
+        choices=["name", "date", "iso", "shutter", "aperture", "focal", "size"],
+        default="name",
+        help="Sort table by field: name, date, iso, shutter, aperture, focal, or size (default: name).",
+    )
+    parser.add_argument(
+        "--reverse",
+        action="store_true",
+        help="Reverse the sort order.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        metavar="N",
+        help="Maximum rows to display in the table (default: 50, use 0 for unlimited).",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=["auto", "exiftool", "pillow"],
+        default="auto",
+        help="EXIF extraction engine to use (default: auto -> exiftool when available, else Pillow).",
+    )
+    parser.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable ANSI colored output.",
+    )
+    return parser
+
+
+def main() -> int:
+    """Main execution flow."""
+    parser = build_parser()
+    args = parser.parse_args()
+
+    use_color = sys.stdout.isatty() and not args.no_color
+
+    target_path = Path(args.path).resolve()
+    if not target_path.exists():
+        print(f"Error: Target path '{args.path}' does not exist.", file=sys.stderr)
+        return 1
+
+    # Determine scanning engine
+    has_exiftool = shutil.which("exiftool") is not None
+    use_exiftool = (args.engine == "exiftool") or (args.engine == "auto" and has_exiftool)
+
+    records = []
+    if use_exiftool:
+        records = extract_with_exiftool([str(target_path)], recursive=args.recursive)
+
+    # Fallback to Pillow if exiftool wasn't used or yielded no results
+    if not records and HAS_PILLOW:
+        files = find_files([str(target_path)], recursive=args.recursive)
+        if files:
+            records = extract_with_pillow(files)
+
+    if not records:
+        if args.json:
+            print(json.dumps({"error": "No image files found or EXIF metadata available.", "count": 0}))
+        else:
+            print(f"No image files found in '{args.path}' matching supported formats.")
+        return 0
+
+    # Sort records
+    def get_sort_key(r):
+        if args.sort == "date":
+            return r.get("datetime_str") or ""
+        elif args.sort == "iso":
+            return r.get("iso") or 0
+        elif args.sort == "shutter":
+            return r.get("shutter_sec") or 0.0
+        elif args.sort == "aperture":
+            return r.get("f_number") or 0.0
+        elif args.sort == "focal":
+            return r.get("focal_length") or 0.0
+        elif args.sort == "size":
+            return r.get("size_bytes") or 0
+        else:
+            return r.get("filename", "").lower()
+
+    records.sort(key=get_sort_key, reverse=args.reverse)
+
+    # Calculate statistics
+    stats = calculate_stats(records)
+
+    # Output options
+    if args.json:
+        # Strip datetime_obj before JSON serialization
+        serializable_records = []
+        for r in records:
+            item = dict(r)
+            item.pop("datetime_obj", None)
+            serializable_records.append(item)
+        print(json.dumps({
+            "target": str(target_path),
+            "summary": stats,
+            "images": serializable_records,
+        }, indent=2))
+        return 0
+
+    if args.csv:
+        print_csv(records)
+        return 0
+
+    # Human-readable output
+    target_label = target_path.name if target_path.is_dir() else str(target_path)
+    limit_val = None if args.limit <= 0 else args.limit
+
+    if not args.summary_only:
+        print_table(records, use_color=use_color, limit=limit_val)
+
+    if not args.table_only:
+        print_dashboard(stats, target_label=target_label, use_color=use_color)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -47,6 +47,12 @@ SCRIPTS = {
         "example": "td_fish_completions",
         "category": "Shell & Completion",
     },
+    "td_exif_summary": {
+        "title": "Photo EXIF Scanner & Statistics",
+        "summary": "Scan images and summarize photographic EXIF metadata (ISO, Shutter, Aperture, Lenses, Camera models).",
+        "example": "td_exif_summary -r /path/to/photos",
+        "category": "Photography & Media",
+    },
     "td_template": {
         "title": "Starter Skeleton Template",
         "summary": "Starter template with argparse, colors, JSON output, and error handling for creating new td_* scripts.",

@@ -14,6 +14,7 @@ The scripts require Python 3 and a few desktop tools depending on the utility:
 | `python-matplotlib` | Standalone LaTeX math engine and PNG rendering | `td_math2img` |
 | `wl-clipboard` (`wl-copy`) | Copying images and text to Wayland clipboard | `td_math2img` |
 | `swayimg` | Wayland-native image viewer | `td_math2img` (optional, for viewing) |
+| `exiftool` / `python-pillow` | Photographic EXIF extraction (supports RAW, DNG, NEF, JPG) | `td_exif_summary` (recommended: `exiftool`) |
 | `/sys/class/power_supply/` | Linux kernel battery sysfs interface | `td_battery_info`, `td_battery_watch` |
 
 ### One-line prerequisite installation
@@ -22,27 +23,27 @@ Choose the command matching your Linux distribution:
 
 - **Arch Linux / EndeavourOS / Manjaro**:
   ```bash
-  sudo pacman -S --needed python python-matplotlib wl-clipboard swayimg
+  sudo pacman -S --needed python python-matplotlib wl-clipboard swayimg perl-image-exiftool python-pillow
   ```
 
 - **Debian / Ubuntu / Linux Mint**:
   ```bash
-  sudo apt-get update && sudo apt-get install -y python3 python3-matplotlib wl-clipboard swayimg
+  sudo apt-get update && sudo apt-get install -y python3 python3-matplotlib wl-clipboard swayimg libimage-exiftool-perl python3-pil
   ```
 
 - **Fedora / RHEL**:
   ```bash
-  sudo dnf install -y python3 python3-matplotlib wl-clipboard swayimg
+  sudo dnf install -y python3 python3-matplotlib wl-clipboard swayimg perl-Image-ExifTool python3-pillow
   ```
 
 - **openSUSE**:
   ```bash
-  sudo zypper install -y python3 python3-matplotlib wl-clipboard swayimg
+  sudo zypper install -y python3 python3-matplotlib wl-clipboard swayimg exiftool python3-Pillow
   ```
 
 - **Void Linux**:
   ```bash
-  sudo xbps-install -Sy python3 python3-matplotlib wl-clipboard swayimg
+  sudo xbps-install -Sy python3 python3-matplotlib wl-clipboard swayimg exiftool python3-Pillow
   ```
 
 ---
@@ -415,7 +416,76 @@ td_fish_completions --dir /path/to/custom/completions
 
 ---
 
-### 7. `td_template`
+### 7. `td_exif_summary`
+
+Scans image files in the current or specified directory and extracts photographic EXIF metadata. Provides both a formatted tabular view of per-file camera settings (ISO, Shutter Speed, Aperture, Focal Length, Camera, Lens, Dimensions) and an aggregate statistical dashboard featuring ISO distribution charts, top camera lenses, aperture frequencies, and exposure spans.
+
+#### Features
+- **Broad Format Support**: Seamlessly processes both standard image formats (`JPG`, `PNG`, `TIFF`, `WEBP`) and RAW camera files (`DNG`, `NEF`, `CR2`, `ARW`, etc.).
+- **Dual Engine Architecture**: Automatically leverages system `exiftool` for fast batch extraction and RAW MakerNote decoding (e.g. precise lens models), falling back to pure-Python `Pillow` when `exiftool` is not installed.
+- **Statistical Dashboard**: Computes aggregate photo statistics including:
+  - ISO range, median, mean, and visual ASCII distribution histogram.
+  - Top shutter speeds and exposure times (correctly handles fractions like `1/640s` and long exposures like `32s`).
+  - Top apertures ($f$-numbers) and focal lengths.
+  - Date and time span of the photo shoot.
+  - Camera models and lens breakdown.
+- **Flexible Display Modes**:
+  - Full view: File table + Statistics dashboard.
+  - `-s, --summary-only`: Print only the aggregate photographic stats dashboard.
+  - `-t, --table-only`: Print only the per-file table.
+- **Sorting & Filtering**:
+  - Sort by `--sort {name,date,iso,shutter,aperture,focal,size}` with `--reverse`.
+  - Limit table rows via `--limit N` (default: 50, use `0` for unlimited).
+- **Export Options**:
+  - `-j, --json`: Machine-readable JSON output for scripting or metadata archival.
+  - `--csv`: Export metadata to CSV for spreadsheets or data analysis.
+- **Recursive Scanning**: `-r, --recursive` recursively traverses all nested photo directories.
+
+#### Usage Examples
+
+```bash
+# Scan current directory and print table + statistics
+td_exif_summary
+
+# Scan a specific directory
+td_exif_summary /path/to/photos
+
+# Recursively scan photo library
+td_exif_summary -r /run/media/tdynamos/Secondary/Pictures
+
+# Show only the statistical dashboard (omitting file table)
+td_exif_summary -s /path/to/photos
+
+# Sort by ISO descending to find high-noise / low-light shots
+td_exif_summary --sort iso --reverse
+
+# Export full photographic metadata to JSON or CSV
+td_exif_summary --json > photo_metadata.json
+td_exif_summary --csv > photo_metadata.csv
+
+# Pipe JSON to jq for custom queries
+td_exif_summary -j | jq '.summary.iso_distribution'
+```
+
+#### Options Reference
+
+| Option | Description |
+|---|---|
+| `PATH` | Target image file or directory to scan (default: current directory `.`). |
+| `-r, --recursive` | Recursively scan all subdirectories for images. |
+| `-s, --summary-only` | Display only the aggregate statistical dashboard (omit file table). |
+| `-t, --table-only` | Display only the per-file table (omit statistical dashboard). |
+| `-j, --json` | Output all records and summary statistics in JSON format. |
+| `--csv` | Output all records as CSV for spreadsheets or data analysis. |
+| `--sort FIELD` | Sort table by: `name`, `date`, `iso`, `shutter`, `aperture`, `focal`, or `size`. |
+| `--reverse` | Reverse the sort order. |
+| `--limit N` | Maximum rows to display in table (default: `50`, use `0` for unlimited). |
+| `--engine ENGINE` | EXIF extraction engine: `auto` (default), `exiftool`, or `pillow`. |
+| `--no-color` | Disable ANSI colored output. |
+
+---
+
+### 8. `td_template`
 
 Starter skeleton template for creating new `td_*` utilities. Includes built-in `argparse` setup, JSON output support, ANSI color management, standard input handling, and exit code handling.
 
