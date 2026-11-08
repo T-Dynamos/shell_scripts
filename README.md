@@ -582,6 +582,8 @@ td_astro_stack -s 32s -j | jq '.snr_improvement_factor'
 | `--ref INDEX_OR_NAME` | Reference frame (1-based index or filename). Default: auto-selects via `--ref-mode`. |
 | `--ref-mode MODE` | Reference frame selection strategy: `highest` (default: highest ISO reveals maximum shadow detail & dynamic range), `median`, or `lowest`. |
 | `--align MODE` | Transform mode: `rigid` (Euclidean rotation + translation, default), `homography`, or `none`. |
+| `--align-target TARGET` | Feature registration focus: `stars` (default: isolates sky stars for maximum Milky Way sharpness & contrast), `ground` (aligns stationary monastery/terrain), or `full`. |
+| `--sky-ratio FLOAT` | Vertical fraction of image from top containing sky (default: `0.65` for landscapes with horizon; use `1.0` for deep sky). |
 | `--no-iso-gain` | Disable automatic ISO exposure gain scaling. |
 | `-m, --method METHOD` | Stacking method: `sigma-clip` (default, rejects satellite trails & hot pixels), `median`, or `mean`. |
 | `-k, --kappa NUM` | Sigma-clipping threshold multiplier $\kappa$ (default: `2.5`). |
@@ -592,6 +594,8 @@ td_astro_stack -s 32s -j | jq '.snr_improvement_factor'
 | `-o, --output FILE` | Output 16-bit master TIFF filename (default: `stack_<shutter>_<N>frames.tif`). |
 | `--stretch ALGO` | Auto-stretch algorithm for 8-bit preview PNG: `mtf` (default), `asinh`, `linear`, or `none`. |
 | `--target-bg FLOAT` | Target sky background brightness for MTF stretch (default: `0.15`). |
+| `--shadow-clip FLOAT` | Shadow clipping factor for sky background neutralization (default: `0.92`). Higher = darker sky. |
+| `--no-contrast-boost` | Disable S-curve contrast boost in preview image. |
 | `-p, -v, --preview` | Automatically open stretched preview in `swayimg` or default image viewer. |
 | `--dry-run` | Scan and display shutter speed groups and alignment plan without processing. |
 | `-j, --json` | Output results and alignment metrics in JSON format. |
