@@ -53,6 +53,12 @@ SCRIPTS = {
         "example": "td_exif_summary -r /path/to/photos",
         "category": "Photography & Media",
     },
+    "td_astro_stack": {
+        "title": "Astrophotography RAW & Image Stacker",
+        "summary": "Stack same shutter speed photos with sub-pixel star alignment (SIFT) and ISO normalization to reduce noise.",
+        "example": "td_astro_stack -s 32s --crop --preview",
+        "category": "Photography & Media",
+    },
     "td_template": {
         "title": "Starter Skeleton Template",
         "summary": "Starter template with argparse, colors, JSON output, and error handling for creating new td_* scripts.",

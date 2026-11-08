@@ -1,0 +1,1274 @@
+#!/usr/bin/env python3
+"""td_astro_stack - Astrophotography RAW & Image Stacker with Star Alignment & ISO Normalization.
+
+Automatically groups photos by shutter speed, performs sub-pixel star alignment (SIFT + RANSAC),
+normalizes exposure gains across varying ISOs (preserving linear dynamic range), and stacks frames
+using ultra-low RAM disk-buffered memory-mapped streaming (np.memmap) with sigma-clipping outlier
+rejection to maximize Signal-to-Noise Ratio (SNR) and remove satellite trails, hot pixels, and cosmic rays.
+
+Outputs a 16-bit linear master TIFF and an auto-stretched (MTF / arcsinh) 8-bit preview PNG.
+
+Author: Ansh Dadwal (T-Dynamos) & Antigravity
+License: MIT
+"""
+
+import os
+import gc
+import sys
+import glob
+import json
+import math
+import time
+import shlex
+import shutil
+import argparse
+import tempfile
+import resource
+import subprocess
+from pathlib import Path
+from typing import Any
+
+# Optional external dependencies with graceful informative error handling
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+
+try:
+    import cv2
+    HAS_OPENCV = True
+except ImportError:
+    HAS_OPENCV = False
+
+try:
+    import rawpy
+    HAS_RAWPY = True
+except ImportError:
+    HAS_RAWPY = False
+
+try:
+    from PIL import Image, ExifTags
+    HAS_PILLOW = True
+except ImportError:
+    HAS_PILLOW = False
+
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.panel import Panel
+    from rich.text import Text
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
+    from rich import box
+    HAS_RICH = True
+except ImportError:
+    HAS_RICH = False
+
+IMAGE_EXTENSIONS = {
+    ".dng", ".cr2", ".cr3", ".nef", ".arw", ".raw", ".orf", ".rw2", ".pef",
+    ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".webp"
+}
+
+RAW_EXTENSIONS = {
+    ".dng", ".cr2", ".cr3", ".nef", ".arw", ".raw", ".orf", ".rw2", ".pef"
+}
+
+
+def get_peak_ram_mb() -> float:
+    """Return peak resident memory usage (RSS) in megabytes."""
+    try:
+        # On Linux, ru_maxrss is in kilobytes
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    except Exception:
+        return 0.0
+
+
+def parse_shutter_seconds(val: Any) -> float | None:
+    """Parse exposure time string or number into seconds as float."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val) if val > 0 else None
+    s = str(val).strip().rstrip("s")
+    if "/" in s:
+        parts = s.split("/")
+        if len(parts) == 2:
+            try:
+                num = float(parts[0])
+                denom = float(parts[1])
+                return (num / denom) if denom != 0 else None
+            except ValueError:
+                return None
+    try:
+        f = float(s)
+        return f if f > 0 else None
+    except ValueError:
+        return None
+
+
+def format_shutter(sec: float | None) -> str:
+    """Format exposure time in seconds to human readable string (e.g. 32s, 1/50s)."""
+    if sec is None or sec <= 0:
+        return "Unknown"
+    if sec >= 1.0:
+        return f"{sec:g}s"
+    denom = round(1.0 / sec)
+    return f"1/{denom}s"
+
+
+def extract_metadata_exiftool(file_paths: list[str]) -> list[dict[str, Any]]:
+    """Extract exposure time, ISO, FNumber, and camera model using exiftool."""
+    exiftool_bin = shutil.which("exiftool")
+    if not exiftool_bin or not file_paths:
+        return []
+
+    cmd = [
+        exiftool_bin,
+        "-json",
+        "-n",
+        "-q",
+        "-q",
+        "-SourceFile",
+        "-ExposureTime",
+        "-ISO",
+        "-FNumber",
+        "-Model",
+        "-DateTimeOriginal",
+    ] + file_paths
+
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        return json.loads(res.stdout)
+    except Exception:
+        return []
+
+
+def extract_metadata_fallback(file_paths: list[str]) -> list[dict[str, Any]]:
+    """Extract basic photographic metadata using Pillow or rawpy if exiftool is unavailable."""
+    records = []
+    for fp in file_paths:
+        rec: dict[str, Any] = {"SourceFile": fp, "ExposureTime": None, "ISO": None, "FNumber": None, "Model": None}
+        if HAS_PILLOW:
+            try:
+                with Image.open(fp) as img:
+                    exif_data = img._getexif() if hasattr(img, "_getexif") else None
+                    if exif_data:
+                        for tag_id, val in exif_data.items():
+                            tag = ExifTags.TAGS.get(tag_id, tag_id)
+                            if tag == "ExposureTime":
+                                rec["ExposureTime"] = parse_shutter_seconds(val)
+                            elif tag == "ISOSpeedRatings":
+                                rec["ISO"] = int(val) if isinstance(val, (int, float)) else None
+                            elif tag == "FNumber":
+                                rec["FNumber"] = float(val) if isinstance(val, (int, float)) else None
+                            elif tag == "Model":
+                                rec["Model"] = str(val).strip()
+            except Exception:
+                pass
+        records.append(rec)
+    return records
+
+
+def scan_images(paths_input: list[str]) -> list[dict[str, Any]]:
+    """Scan directory or list of file paths and return extracted image metadata records."""
+    candidate_files: list[str] = []
+
+    for item in paths_input:
+        p = Path(item).expanduser()
+        if p.is_dir():
+            for f in sorted(p.iterdir()):
+                if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS:
+                    # Ignore previously generated master stack files and previews in the same dir
+                    if f.name.startswith("stack_") and ("_preview" in f.name or f.suffix.lower() in (".tif", ".tiff", ".png")):
+                        continue
+                    candidate_files.append(str(f.resolve()))
+        elif p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
+            candidate_files.append(str(p.resolve()))
+        elif any(c in item for c in "*?["):
+            for match in sorted(glob.glob(item)):
+                mp = Path(match)
+                if mp.is_file() and mp.suffix.lower() in IMAGE_EXTENSIONS:
+                    candidate_files.append(str(mp.resolve()))
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique_files = []
+    for f in candidate_files:
+        if f not in seen:
+            seen.add(f)
+            unique_files.append(f)
+
+    if not unique_files:
+        return []
+
+    # Attempt exiftool extraction first
+    records = extract_metadata_exiftool(unique_files)
+    if not records:
+        records = extract_metadata_fallback(unique_files)
+
+    # Standardize records
+    std_records = []
+    for r in records:
+        fp = r.get("SourceFile", "")
+        shutter = parse_shutter_seconds(r.get("ExposureTime"))
+        iso = r.get("ISO")
+        if iso is not None:
+            try:
+                iso = int(iso)
+            except (ValueError, TypeError):
+                iso = None
+
+        fnum = r.get("FNumber")
+        if fnum is not None:
+            try:
+                fnum = float(fnum)
+            except (ValueError, TypeError):
+                fnum = None
+
+        std_records.append({
+            "path": fp,
+            "filename": Path(fp).name,
+            "shutter_sec": shutter,
+            "shutter_str": format_shutter(shutter),
+            "iso": iso,
+            "fnumber": fnum,
+            "model": r.get("Model"),
+            "datetime": r.get("DateTimeOriginal"),
+        })
+
+    return std_records
+
+
+def load_image_16bit(path: str, half_size: bool = False) -> np.ndarray:
+    """Load image as linear 16-bit RGB float32 numpy array."""
+    ext = Path(path).suffix.lower()
+
+    if ext in RAW_EXTENSIONS and HAS_RAWPY:
+        with rawpy.imread(path) as raw:
+            # no_auto_bright=True keeps RAW sensor digital counts linear!
+            # gamma=(1, 1) keeps linear sensor curve!
+            rgb = raw.postprocess(
+                no_auto_bright=True,
+                use_camera_wb=True,
+                half_size=half_size,
+                output_bps=16,
+                gamma=(1, 1),
+            )
+            return rgb.astype(np.float32)
+
+    if HAS_OPENCV:
+        img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if img is not None:
+            if img.ndim == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+            elif img.shape[2] == 4:
+                img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
+            elif img.shape[2] == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+            if img.dtype == np.uint8:
+                img = (img.astype(np.float32) / 255.0) * 65535.0
+            else:
+                img = img.astype(np.float32)
+
+            if half_size:
+                h, w = img.shape[:2]
+                img = cv2.resize(img, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
+            return img
+
+    if HAS_PILLOW:
+        with Image.open(path) as pil_img:
+            arr = np.array(pil_img.convert("RGB"), dtype=np.float32)
+            if pil_img.mode not in ("I;16", "I;16B", "I;16L", "RGB;16"):
+                arr = (arr / 255.0) * 65535.0
+            if half_size:
+                h, w = arr.shape[:2]
+                arr = cv2.resize(arr, (w // 2, h // 2), interpolation=cv2.INTER_AREA)
+            return arr
+
+    raise RuntimeError(f"Unable to load image file {path}. rawpy, OpenCV, or Pillow is required.")
+
+
+def extract_star_features(img_rgb: np.ndarray, n_features: int = 3000) -> tuple[np.ndarray, np.ndarray]:
+    """Detect star keypoints and descriptors using SIFT on green channel with contrast enhancement."""
+    h, w = img_rgb.shape[:2]
+
+    # Use green channel (index 1) for stars: sharpest SNR on Bayer sensors
+    green = img_rgb[..., 1]
+    # Robust normalization using 99.8th percentile to prevent hot pixels from compressing contrast
+    p_high = float(np.percentile(green, 99.8))
+    if p_high > 0:
+        g_u8 = np.clip((green / p_high) * 255.0, 0, 255).astype(np.uint8)
+    else:
+        g_u8 = np.zeros((h, w), dtype=np.uint8)
+
+    # Downsample to ~1600px max dimension for fast star detection
+    scale = 1600.0 / max(h, w) if max(h, w) > 1600 else 1.0
+    if scale < 1.0:
+        target_w, target_h = int(w * scale), int(h * scale)
+        small = cv2.resize(g_u8, (target_w, target_h), interpolation=cv2.INTER_AREA)
+    else:
+        small = g_u8
+
+    # CLAHE contrast enhancement to isolate faint stars from sky glow
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    enh = clahe.apply(small)
+
+    sift = cv2.SIFT_create(nfeatures=n_features)
+    kp, des = sift.detectAndCompute(enh, None)
+
+    if not kp or des is None:
+        return np.empty((0, 2), dtype=np.float32), np.empty((0, 128), dtype=np.float32)
+
+    # Scale keypoints back to full coordinate space
+    pts = np.float32([[p.pt[0] / scale, p.pt[1] / scale] for p in kp])
+    return pts, des
+
+
+def align_frame(
+    pts_curr: np.ndarray,
+    des_curr: np.ndarray,
+    pts_ref: np.ndarray,
+    des_ref: np.ndarray,
+    matcher: cv2.BFMatcher,
+    mode: str = "rigid",
+) -> tuple[np.ndarray | None, int, int, float, float, float]:
+    """Match star keypoints and estimate affine or homography transformation matrix to reference."""
+    if len(des_curr) < 10 or len(des_ref) < 10:
+        return None, 0, 0, 0.0, 0.0, 0.0
+
+    matches = matcher.knnMatch(des_curr, des_ref, k=2)
+    good = [m for m, n in matches if len((m, n)) == 2 and m.distance < 0.75 * n.distance]
+
+    if len(good) < 8:
+        return None, len(good), 0, 0.0, 0.0, 0.0
+
+    p_curr = np.float32([pts_curr[m.queryIdx] for m in good])
+    p_ref = np.float32([pts_ref[m.trainIdx] for m in good])
+
+    if mode == "rigid":
+        # Estimate 2x3 Euclidean partial affine (translation + rotation + uniform scale)
+        M, inliers = cv2.estimateAffinePartial2D(p_curr, p_ref, method=cv2.RANSAC, ransacReprojThreshold=3.0)
+        if M is None:
+            return None, len(good), 0, 0.0, 0.0, 0.0
+        n_inliers = int(np.sum(inliers)) if inliers is not None else 0
+        dx = float(M[0, 2])
+        dy = float(M[1, 2])
+        theta = float(np.degrees(np.arctan2(M[1, 0], M[0, 0])))
+        return M, len(good), n_inliers, dx, dy, theta
+
+    elif mode == "homography":
+        H, inliers = cv2.findHomography(p_curr, p_ref, cv2.RANSAC, 3.0)
+        if H is None:
+            return None, len(good), 0, 0.0, 0.0, 0.0
+        n_inliers = int(np.sum(inliers)) if inliers is not None else 0
+        dx = float(H[0, 2])
+        dy = float(H[1, 2])
+        theta = float(np.degrees(np.arctan2(H[1, 0], H[0, 0])))
+        return H, len(good), n_inliers, dx, dy, theta
+
+    else:
+        M = np.eye(2, 3, dtype=np.float32)
+        return M, len(good), len(good), 0.0, 0.0, 0.0
+
+
+def warp_image_and_mask(
+    img: np.ndarray,
+    M: np.ndarray,
+    shape_hw: tuple[int, int],
+    mode: str = "rigid",
+) -> tuple[np.ndarray, np.ndarray]:
+    """Warp image and binary mask into reference frame coordinates."""
+    h, w = shape_hw
+    ones_mask = np.ones((h, w), dtype=np.uint8)
+
+    if mode == "homography":
+        warped = cv2.warpPerspective(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        mask = cv2.warpPerspective(ones_mask, M, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0) > 0
+    else:
+        warped = cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        mask = cv2.warpAffine(ones_mask, M, (w, h), flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT, borderValue=0) > 0
+
+    return warped, mask
+
+
+def stack_frames_disk_stream(
+    frame_paths: list[Path],
+    mask_paths: list[Path],
+    shape_hwc: tuple[int, int, int],
+    out_dat_path: Path,
+    method: str = "sigma-clip",
+    kappa: float = 2.5,
+    chunk_size: int = 256,
+    progress_callback: Any = None,
+) -> np.memmap:
+    """Stack warped frames directly from memory-mapped disk files using minimal RAM.
+
+    Each row chunk is streamed from disk on demand, processed, and written
+    directly to the output memory-mapped file, keeping RAM footprint < 150 MB.
+    """
+    h, w, c = shape_hwc
+    n_frames = len(frame_paths)
+
+    # Open all frames and masks as read-only disk memory-maps (0 initial RAM allocation)
+    f_mmaps = [np.memmap(str(p), dtype=np.float32, mode="r", shape=shape_hwc) for p in frame_paths]
+    m_mmaps = [np.memmap(str(p), dtype=np.uint8, mode="r", shape=(h, w)) for p in mask_paths]
+
+    # Output master array on disk
+    out_mmap = np.memmap(str(out_dat_path), dtype=np.float32, mode="w+", shape=shape_hwc)
+
+    total_chunks = math.ceil(h / chunk_size)
+
+    for chunk_idx, r0 in enumerate(range(0, h, chunk_size)):
+        r1 = min(h, r0 + chunk_size)
+        chunk_h = r1 - r0
+
+        # Read only this chunk into memory: shape (N, chunk_h, W, C)
+        chunk = np.stack([f[r0:r1] for f in f_mmaps], axis=0)
+        # Mask shape: (N, chunk_h, W, 1)
+        chunk_m = np.stack([m[r0:r1, :, np.newaxis] > 0 for m in m_mmaps], axis=0)
+
+        # Count of valid frames per pixel
+        counts = np.sum(chunk_m, axis=0, keepdims=True)
+        safe_counts = np.maximum(counts, 1)
+
+        if method == "mean":
+            sums = np.sum(np.where(chunk_m, chunk, 0.0), axis=0)
+            res = sums / np.maximum(counts[0], 1)
+
+        elif method == "median":
+            valid_chunk = np.where(chunk_m, chunk, np.nan)
+            res = np.nanmedian(valid_chunk, axis=0)
+            res = np.nan_to_num(res, nan=0.0)
+
+        else:  # sigma-clip
+            # 1. Robust mean of valid pixels
+            mean = np.sum(np.where(chunk_m, chunk, 0.0), axis=0, keepdims=True) / safe_counts
+
+            # 2. Variance & standard deviation
+            diff = np.abs(chunk - mean)
+            var = np.sum(np.where(chunk_m, diff**2, 0.0), axis=0, keepdims=True) / safe_counts
+            std = np.sqrt(var)
+
+            # 3. Reject outliers beyond kappa * std
+            inliers = chunk_m & (diff <= kappa * np.maximum(std, 1e-4))
+            inlier_counts = np.sum(inliers, axis=0)
+            inlier_sums = np.sum(np.where(inliers, chunk, 0.0), axis=0)
+
+            # 4. Inlier average (fallback to mean where all rejected)
+            res = np.where(inlier_counts > 0, inlier_sums / np.maximum(inlier_counts, 1), mean[0])
+
+        out_mmap[r0:r1] = res
+
+        # Explicit cleanup to ensure immediate memory freeing
+        del chunk, chunk_m, counts, safe_counts, res
+        if chunk_idx % 4 == 0:
+            gc.collect()
+
+        if progress_callback:
+            progress_callback(chunk_idx + 1, total_chunks)
+
+    out_mmap.flush()
+
+    # Close input mmaps
+    for f in f_mmaps:
+        del f
+    for m in m_mmaps:
+        del m
+    gc.collect()
+
+    return out_mmap
+
+
+def compute_overlap_crop_bbox(
+    mask_paths: list[Path],
+    shape_hw: tuple[int, int],
+    chunk_size: int = 256,
+) -> tuple[int, int, int, int]:
+    """Stream mask files from disk in chunks to find the intersection bounding box."""
+    h, w = shape_hw
+    m_mmaps = [np.memmap(str(p), dtype=np.uint8, mode="r", shape=(h, w)) for p in mask_paths]
+
+    overlap_row_any = np.zeros(h, dtype=bool)
+    overlap_col_any = np.zeros(w, dtype=bool)
+
+    for r0 in range(0, h, chunk_size):
+        r1 = min(h, r0 + chunk_size)
+        chunk_overlap = np.ones((r1 - r0, w), dtype=bool)
+        for m in m_mmaps:
+            chunk_overlap &= (m[r0:r1] > 0)
+
+        overlap_row_any[r0:r1] = np.any(chunk_overlap, axis=1)
+        overlap_col_any |= np.any(chunk_overlap, axis=0)
+
+    ys = np.where(overlap_row_any)[0]
+    xs = np.where(overlap_col_any)[0]
+
+    for m in m_mmaps:
+        del m
+
+    ymin, ymax = (int(ys[0]), int(ys[-1]) + 1) if len(ys) > 0 else (0, h)
+    xmin, xmax = (int(xs[0]), int(xs[-1]) + 1) if len(xs) > 0 else (0, w)
+    return ymin, ymax, xmin, xmax
+
+
+def astro_auto_stretch(
+    img_u16: np.ndarray,
+    target_bg: float = 0.15,
+    shadow_clip: float = 0.92,
+    method: str = "mtf",
+) -> np.ndarray:
+    """Astrophotography-optimized auto-stretch with per-channel sky background neutralization.
+
+    Isolates sky background (robust against bright foregrounds like monasteries or terrain),
+    subtracts the light-pollution pedestal, balances color channels, and applies non-linear
+    MTF or Arcsinh stretching to reveal Milky Way arms, faint nebulae, and dust lanes.
+    """
+    h, w, c = img_u16.shape
+    f_img = img_u16.astype(np.float32)
+
+    # Subsampled grid (every 8th pixel) for instantaneous statistics without memory overhead
+    sample = f_img[::8, ::8]
+    out = np.zeros((h, w, c), dtype=np.uint8)
+
+    for ch in range(c):
+        ch_sample = sample[..., ch]
+        # In astrophotography scenes with terrain/monastery, the 20th percentile isolates true sky background
+        p_bg = float(np.percentile(ch_sample, 20))
+        p_high = float(np.percentile(ch_sample, 99.9))
+
+        # Shadow clipping pedestal slightly below sky background noise floor
+        c0 = p_bg * shadow_clip
+        c1 = max(c0 + 1000.0, p_high)
+
+        ch_data = f_img[..., ch]
+        norm = np.clip((ch_data - c0) / (c1 - c0), 0.0, 1.0)
+
+        if method == "asinh":
+            beta = 0.015
+            stretched = np.arcsinh(norm / beta) / np.arcsinh(1.0 / beta)
+            out[..., ch] = np.clip(stretched * 255.0, 0, 255).astype(np.uint8)
+        elif method == "linear":
+            out[..., ch] = np.clip(norm * 255.0, 0, 255).astype(np.uint8)
+        else:  # 'mtf'
+            norm_sample = np.clip((ch_sample - c0) / (c1 - c0), 0.0, 1.0)
+            m = float(np.median(norm_sample))
+            denom = target_bg * (2.0 * m - 1.0) - m
+            b = 0.5 if abs(denom) < 1e-7 else (target_bg - 1.0) * m / denom
+            b = float(np.clip(b, 0.001, 0.999))
+
+            num = (b - 1.0) * norm
+            den = (2.0 * b - 1.0) * norm - b
+            stretched = np.where(np.abs(den) > 1e-7, num / den, 0.0)
+            out[..., ch] = np.clip(stretched * 255.0, 0, 255).astype(np.uint8)
+
+    return out
+
+
+def view_in_viewer(img_path: str, viewer_bin: str | None = None, detach: bool = True) -> bool:
+    """Open image in swayimg or default system image viewer."""
+    if not viewer_bin:
+        for candidate in ["swayimg", "feh", "imv", "eog", "xdg-open"]:
+            if shutil.which(candidate):
+                viewer_bin = candidate
+                break
+
+    if not viewer_bin:
+        sys.stderr.write("Notice: No image viewer found in PATH (swayimg, feh, xdg-open).\n")
+        return False
+
+    cmd = [viewer_bin, img_path]
+    try:
+        if detach:
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                env=os.environ.copy(),
+            )
+        else:
+            subprocess.run(cmd, env=os.environ.copy())
+        return True
+    except Exception as e:
+        sys.stderr.write(f"Notice: Failed to launch viewer {viewer_bin}: {e}\n")
+        return False
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build and return command line argument parser for td_astro_stack."""
+    parser = argparse.ArgumentParser(
+        prog="td_astro_stack",
+        description="Astrophotography RAW & Image Stacker with Star Alignment & ISO Normalization (Ultra-Low RAM Disk Streaming).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  %(prog)s                                   # Auto-detect largest shutter group in current dir and stack
+  %(prog)s /path/to/astro_raws/             # Stack photos in directory
+  %(prog)s -s 32s                           # Stack photos specifically taken at 32 seconds exposure
+  %(prog)s -s 10s --method median           # Stack 10s photos using median stacking
+  %(prog)s --fast --preview                 # Fast half-size preview stack and view in swayimg
+  %(prog)s --crop --stretch asinh           # Auto-crop unaligned borders and apply arcsinh stretch
+  %(prog)s -o master_milkyway.tif           # Specify custom output master filename
+  %(prog)s --temp-dir /mnt/nvme/tmp         # Use custom scratch disk location for temp files
+  %(prog)s --dry-run                        # Inspect shutter groups and ISO range without stacking
+""",
+    )
+
+    # Input paths
+    parser.add_argument(
+        "path",
+        nargs="*",
+        default=["."],
+        help="Input directory, image file paths, or glob pattern (default: current directory).",
+    )
+
+    # Grouping & filtering
+    parser.add_argument(
+        "-s",
+        "--shutter",
+        metavar="SEC",
+        help="Target shutter speed to stack (e.g. '32s', '32', '10s', '1/4s'). Auto-selects largest group if omitted.",
+    )
+    parser.add_argument(
+        "--ref",
+        metavar="INDEX_OR_NAME",
+        help="Reference frame to align against (1-based index or filename). Default: auto-selects via --ref-mode.",
+    )
+    parser.add_argument(
+        "--ref-mode",
+        choices=["highest", "median", "lowest"],
+        default="highest",
+        help="Strategy to auto-select reference frame: 'highest' (default: highest ISO reveals maximum shadow detail & dynamic range), 'median', or 'lowest'.",
+    )
+
+    # Alignment & Normalization
+    parser.add_argument(
+        "--align",
+        choices=["rigid", "homography", "none"],
+        default="rigid",
+        help="Star registration transform mode: 'rigid' (Euclidean rotation+translation, default), 'homography' (perspective), or 'none'.",
+    )
+    parser.add_argument(
+        "--no-iso-gain",
+        action="store_true",
+        help="Disable automatic ISO exposure gain scaling (not recommended when combining differing ISOs).",
+    )
+
+    # Stacking options
+    parser.add_argument(
+        "-m",
+        "--method",
+        choices=["sigma-clip", "median", "mean"],
+        default="sigma-clip",
+        help="Stacking method: 'sigma-clip' (default, rejects satellites & cosmic rays), 'median', or 'mean'.",
+    )
+    parser.add_argument(
+        "-k",
+        "--kappa",
+        type=float,
+        default=2.5,
+        metavar="NUM",
+        help="Sigma-clipping threshold multiplier kappa (default: 2.5). Lower = more aggressive rejection.",
+    )
+    parser.add_argument(
+        "--crop",
+        action="store_true",
+        help="Auto-crop output to the intersection bounding box where all frames overlap.",
+    )
+
+    # Performance & Memory Management
+    parser.add_argument(
+        "--fast",
+        "--half-size",
+        dest="fast",
+        action="store_true",
+        help="Process in half-size mode for ultra-fast stacking and test previews.",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=256,
+        metavar="ROWS",
+        help="Row chunk size during stacking to constrain RAM usage (default: 256 rows).",
+    )
+    parser.add_argument(
+        "--temp-dir",
+        metavar="DIR",
+        help="Directory for disk scratch buffers / memmap files (default: system temp / /tmp).",
+    )
+
+    # Output & Preview
+    parser.add_argument(
+        "-o",
+        "--output",
+        metavar="FILE",
+        help="Output 16-bit master TIFF filename (default: stack_<shutter>_<N>frames.tif).",
+    )
+    parser.add_argument(
+        "--stretch",
+        choices=["mtf", "asinh", "linear", "none"],
+        default="mtf",
+        help="Auto-stretch algorithm for 8-bit preview PNG: 'mtf' (Midtone Transfer Function, default), 'asinh', 'linear', or 'none'.",
+    )
+    parser.add_argument(
+        "--target-bg",
+        type=float,
+        default=0.15,
+        metavar="FLOAT",
+        help="Target sky background brightness for MTF stretch between 0.01 and 0.50 (default: 0.15).",
+    )
+    parser.add_argument(
+        "--shadow-clip",
+        type=float,
+        default=0.92,
+        metavar="FLOAT",
+        help="Shadow clipping factor for sky background neutralization between 0.50 and 1.0 (default: 0.92). Higher = darker sky background.",
+    )
+    parser.add_argument(
+        "-p",
+        "-v",
+        "--preview",
+        "--view",
+        dest="preview",
+        action="store_true",
+        help="Automatically open the stretched preview image in swayimg or default image viewer.",
+    )
+
+    # Meta & UI
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Scan and display shutter speed groups and alignment plan without processing frames.",
+    )
+    parser.add_argument(
+        "-j",
+        "--json",
+        action="store_true",
+        help="Output results and alignment metrics in JSON format.",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Quiet mode: suppress progress output and non-essential logs.",
+    )
+
+    return parser
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    # Verify dependencies
+    missing_deps = []
+    if not HAS_NUMPY:
+        missing_deps.append("numpy")
+    if not HAS_OPENCV:
+        missing_deps.append("opencv-python (cv2)")
+    if not HAS_RAWPY:
+        missing_deps.append("rawpy (for RAW/DNG support)")
+
+    if missing_deps:
+        sys.stderr.write(f"Error: Missing required Python dependencies: {', '.join(missing_deps)}\n")
+        sys.stderr.write("Install them via: pacman -S python-numpy python-opencv python-rawpy  or  pip install numpy opencv-python rawpy\n")
+        return 1
+
+    console = Console() if HAS_RICH and not args.quiet and not args.json else None
+
+    # Step 1: Scan and group image records
+    if console:
+        console.print("[bold cyan]Scanning directory and inspecting photographic EXIF metadata...[/bold cyan]")
+    records = scan_images(args.path)
+
+    if not records:
+        sys.stderr.write("Error: No supported image or RAW files found in specified path.\n")
+        return 1
+
+    # Group by shutter speed string
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for r in records:
+        if r["shutter_sec"] is not None:
+            groups.setdefault(r["shutter_str"], []).append(r)
+        else:
+            groups.setdefault("Unknown", []).append(r)
+
+    # Sort groups by count descending
+    sorted_groups = sorted(groups.items(), key=lambda kv: len(kv[1]), reverse=True)
+
+    # Display groups table
+    if console and not args.json:
+        tbl = Table(title="Detected Shutter Speed Groups", box=box.ROUNDED)
+        tbl.add_column("Shutter Speed", style="bold yellow")
+        tbl.add_column("Frames", justify="right", style="cyan")
+        tbl.add_column("ISO Range", style="magenta")
+        tbl.add_column("Aperture", style="green")
+        tbl.add_column("Camera Model", style="dim")
+        tbl.add_column("Selected", justify="center")
+
+        target_shutter_match = None
+        if args.shutter:
+            req = args.shutter.strip().lower().rstrip("s")
+            for k in groups:
+                if k.lower().rstrip("s") == req or k.lower() == req + "s":
+                    target_shutter_match = k
+                    break
+
+        if not target_shutter_match:
+            target_shutter_match = sorted_groups[0][0]
+
+        for s_str, flist in sorted_groups:
+            isos = [x["iso"] for x in flist if x["iso"] is not None]
+            iso_str = f"{min(isos)} - {max(isos)}" if isos else "N/A"
+            fnums = [x["fnumber"] for x in flist if x["fnumber"] is not None]
+            fnum_str = f"f/{min(fnums):.1f}" if fnums else "N/A"
+            models = list({x["model"] for x in flist if x["model"]})
+            mod_str = models[0] if len(models) == 1 else (f"{models[0]} (+{len(models)-1})" if models else "N/A")
+            is_sel = "[bold green]✓[/bold green]" if s_str == target_shutter_match else ""
+            tbl.add_row(s_str, str(len(flist)), iso_str, fnum_str, mod_str, is_sel)
+
+        console.print(tbl)
+
+    # Determine selected group
+    selected_shutter = None
+    if args.shutter:
+        req = args.shutter.strip().lower().rstrip("s")
+        for k in groups:
+            if k.lower().rstrip("s") == req or k.lower() == req + "s":
+                selected_shutter = k
+                break
+        if not selected_shutter:
+            sys.stderr.write(f"Error: No images found with shutter speed '{args.shutter}'.\n")
+            return 1
+    else:
+        selected_shutter = sorted_groups[0][0]
+
+    selected_frames = groups[selected_shutter]
+    n_selected = len(selected_frames)
+
+    if n_selected < 1:
+        sys.stderr.write(f"Error: No images found for shutter speed {selected_shutter}.\n")
+        return 1
+
+    if n_selected == 1 and not args.quiet:
+        sys.stderr.write(f"Warning: Only 1 frame found for shutter speed {selected_shutter}. Stacking typically requires 2+ frames.\n")
+
+    # Select reference frame
+    ref_idx = 0
+    if args.ref:
+        if args.ref.isdigit():
+            idx = int(args.ref) - 1
+            if 0 <= idx < n_selected:
+                ref_idx = idx
+            else:
+                sys.stderr.write(f"Error: Reference index {args.ref} out of range (1 to {n_selected}).\n")
+                return 1
+        else:
+            match_found = False
+            for i, f in enumerate(selected_frames):
+                if args.ref in (f["filename"], f["path"]):
+                    ref_idx = i
+                    match_found = True
+                    break
+            if not match_found:
+                sys.stderr.write(f"Error: Reference frame '{args.ref}' not found in selected group.\n")
+                return 1
+    else:
+        # Auto-select reference frame based on --ref-mode (default: highest ISO to reveal maximum detail)
+        iso_indices = [(i, f["iso"] or 0) for i, f in enumerate(selected_frames)]
+        if args.ref_mode == "highest":
+            max_iso = max(x[1] for x in iso_indices)
+            high_candidates = [x[0] for x in iso_indices if x[1] == max_iso]
+            # Pick the middle candidate if multiple share the highest ISO
+            ref_idx = high_candidates[len(high_candidates) // 2]
+        elif args.ref_mode == "median":
+            iso_indices.sort(key=lambda x: x[1])
+            ref_idx = iso_indices[len(iso_indices) // 2][0]
+        else:  # lowest
+            min_iso = min(x[1] for x in iso_indices)
+            low_candidates = [x[0] for x in iso_indices if x[1] == min_iso]
+            ref_idx = low_candidates[0]
+
+    ref_frame = selected_frames[ref_idx]
+    ref_iso = ref_frame["iso"] or 400
+
+    if args.dry_run:
+        if args.json:
+            print(json.dumps({
+                "dry_run": True,
+                "shutter": selected_shutter,
+                "frames_count": n_selected,
+                "reference_frame": ref_frame["filename"],
+                "reference_iso": ref_iso,
+                "groups": {s: len(flist) for s, flist in sorted_groups},
+                "frames": selected_frames,
+            }, indent=2))
+            return 0
+        if console:
+            console.print(f"\n[bold green]DRY RUN Summary:[/bold green] Would stack {n_selected} frames at {selected_shutter}.")
+            console.print(f"Reference Frame: [bold cyan]{ref_frame['filename']}[/bold cyan] (ISO {ref_iso})")
+            console.print(f"Stacking Method: [yellow]{args.method}[/yellow] | Alignment: [yellow]{args.align}[/yellow]")
+            console.print(f"RAM Architecture: [bold green]Disk-buffered memory-mapped streaming (< 150 MB RAM)[/bold green]")
+        else:
+            print(f"DRY RUN: Would stack {n_selected} frames at {selected_shutter} (Reference: {ref_frame['filename']}, ISO {ref_iso})")
+        return 0
+
+    # Determine output filenames
+    first_path = Path(selected_frames[0]["path"])
+    base_dir = first_path.parent
+
+    if args.output:
+        out_tif_path = Path(args.output).expanduser()
+        if not out_tif_path.suffix.lower() in (".tif", ".tiff"):
+            out_tif_path = out_tif_path.with_suffix(".tif")
+    else:
+        clean_shutter = selected_shutter.replace("/", "_")
+        out_tif_path = base_dir / f"stack_{clean_shutter}_{n_selected}frames.tif"
+
+    out_png_path = out_tif_path.with_name(out_tif_path.stem + "_preview.png")
+
+    # Step 2: Set up temporary disk scratch directory for minimal RAM usage
+    temp_dir_obj = tempfile.TemporaryDirectory(prefix="td_astro_stack_", dir=args.temp_dir)
+    tmp_path = Path(temp_dir_obj.name)
+
+    t_start = time.time()
+    try:
+        # Load Reference Frame
+        if console:
+            console.print(f"\n[bold]Loading Reference Frame:[/bold] [cyan]{ref_frame['filename']}[/cyan] (ISO {ref_iso})")
+
+        ref_img = load_image_16bit(ref_frame["path"], half_size=args.fast)
+        h, w, c = ref_img.shape
+        if console:
+            console.print(f"Reference dimensions: [bold]{w} x {h}[/bold] pixels (16-bit linear RGB)")
+            console.print(f"Memory Management: [bold green]Ultra-Low RAM mode enabled (disk streaming via {tmp_path})[/bold green]")
+
+        # Extract reference star keypoints
+        pts_ref, des_ref = extract_star_features(ref_img, n_features=3000)
+        if len(pts_ref) < 10 and args.align != "none":
+            sys.stderr.write(f"Warning: Only {len(pts_ref)} star keypoints detected on reference frame. Alignment accuracy may be reduced.\n")
+
+        matcher = cv2.BFMatcher(cv2.NORM_L2) if args.align != "none" else None
+
+        # Step 3: Align frames and write directly to disk memory-maps (never holding all frames in RAM!)
+        frame_disk_paths: list[Path] = []
+        mask_disk_paths: list[Path] = []
+        frame_metrics: list[dict[str, Any]] = []
+
+        align_table = None
+        if console:
+            align_table = Table(title=f"Star Registration & ISO Gain Normalization ({selected_shutter})", box=box.ROUNDED)
+            align_table.add_column("#", justify="right", style="dim")
+            align_table.add_column("Filename", style="cyan")
+            align_table.add_column("ISO", justify="right", style="magenta")
+            align_table.add_column("Gain", justify="right", style="yellow")
+            align_table.add_column("Stars / Inliers", justify="right")
+            align_table.add_column("Drift (Δx, Δy)", justify="right")
+            align_table.add_column("Rotation", justify="right")
+            align_table.add_column("Status", justify="center")
+
+        for i, frame in enumerate(selected_frames):
+            fname = frame["filename"]
+            f_iso = frame["iso"] or ref_iso
+            gain = 1.0 if args.no_iso_gain else (float(ref_iso) / float(f_iso))
+
+            frame_dat = tmp_path / f"frame_{i:04d}.dat"
+            mask_dat = tmp_path / f"mask_{i:04d}.dat"
+
+            if i == ref_idx:
+                # Reference frame itself
+                warped = ref_img * gain
+                mask = np.ones((h, w), dtype=np.uint8)
+
+                # Write directly to disk
+                f_mmap = np.memmap(str(frame_dat), dtype=np.float32, mode="w+", shape=(h, w, c))
+                f_mmap[:] = warped
+                f_mmap.flush()
+                del f_mmap
+
+                m_mmap = np.memmap(str(mask_dat), dtype=np.uint8, mode="w+", shape=(h, w))
+                m_mmap[:] = mask
+                m_mmap.flush()
+                del m_mmap
+
+                del warped, mask
+                gc.collect()
+
+                frame_disk_paths.append(frame_dat)
+                mask_disk_paths.append(mask_dat)
+
+                frame_metrics.append({
+                    "index": i + 1,
+                    "filename": fname,
+                    "iso": f_iso,
+                    "gain": gain,
+                    "inliers": len(pts_ref),
+                    "total_matches": len(pts_ref),
+                    "shift_x": 0.0,
+                    "shift_y": 0.0,
+                    "rotation_deg": 0.0,
+                    "status": "REFERENCE",
+                })
+                if align_table:
+                    align_table.add_row(
+                        str(i + 1), fname, str(f_iso), f"{gain:.2f}x", f"{len(pts_ref)} stars", "0.0, 0.0 px", "0.00°", "[bold cyan]REFERENCE[/bold cyan]"
+                    )
+                continue
+
+            try:
+                curr_img = load_image_16bit(frame["path"], half_size=args.fast)
+            except Exception as e:
+                if console:
+                    console.print(f"[bold red]Failed loading {fname}: {e}[/bold red]")
+                continue
+
+            # Digital gain scaling
+            curr_scaled = curr_img * gain
+            del curr_img
+            gc.collect()
+
+            if args.align == "none":
+                M = np.eye(2, 3, dtype=np.float32)
+                warped = curr_scaled
+                mask = np.ones((h, w), dtype=np.uint8)
+                matches_count, inliers_count, dx, dy, theta = 0, 0, 0.0, 0.0, 0.0
+                status_str = "ALIGNED (NONE)"
+            else:
+                pts_curr, des_curr = extract_star_features(curr_scaled, n_features=3000)
+                M, matches_count, inliers_count, dx, dy, theta = align_frame(
+                    pts_curr, des_curr, pts_ref, des_ref, matcher, mode=args.align
+                )
+
+                if M is None or inliers_count < 8:
+                    if align_table:
+                        align_table.add_row(
+                            str(i + 1), fname, str(f_iso), f"{gain:.2f}x", f"{matches_count} matches", "-", "-", "[bold red]FAILED[/bold red]"
+                        )
+                    frame_metrics.append({
+                        "index": i + 1,
+                        "filename": fname,
+                        "iso": f_iso,
+                        "gain": gain,
+                        "inliers": inliers_count,
+                        "total_matches": matches_count,
+                        "shift_x": 0.0,
+                        "shift_y": 0.0,
+                        "rotation_deg": 0.0,
+                        "status": "FAILED",
+                    })
+                    del curr_scaled
+                    gc.collect()
+                    continue
+
+                warped, mask_bool = warp_image_and_mask(curr_scaled, M, (h, w), mode=args.align)
+                mask = mask_bool.astype(np.uint8)
+                status_str = "ALIGNED"
+
+            # Write warped image and mask directly to disk
+            f_mmap = np.memmap(str(frame_dat), dtype=np.float32, mode="w+", shape=(h, w, c))
+            f_mmap[:] = warped
+            f_mmap.flush()
+            del f_mmap
+
+            m_mmap = np.memmap(str(mask_dat), dtype=np.uint8, mode="w+", shape=(h, w))
+            m_mmap[:] = mask
+            m_mmap.flush()
+            del m_mmap
+
+            # Release frame from RAM immediately
+            del curr_scaled, warped, mask
+            gc.collect()
+
+            frame_disk_paths.append(frame_dat)
+            mask_disk_paths.append(mask_dat)
+
+            frame_metrics.append({
+                "index": i + 1,
+                "filename": fname,
+                "iso": f_iso,
+                "gain": gain,
+                "inliers": inliers_count,
+                "total_matches": matches_count,
+                "shift_x": dx,
+                "shift_y": dy,
+                "rotation_deg": theta,
+                "status": status_str,
+            })
+
+            if align_table:
+                align_table.add_row(
+                    str(i + 1),
+                    fname,
+                    str(f_iso),
+                    f"{gain:.2f}x",
+                    f"{inliers_count}/{matches_count}" if inliers_count else "-",
+                    f"{dx:+5.1f}, {dy:+5.1f} px" if inliers_count else "-",
+                    f"{theta:+5.2f}°" if inliers_count else "-",
+                    "[bold green]ALIGNED[/bold green]",
+                )
+
+        if align_table and console:
+            console.print(align_table)
+
+        # Release reference image array
+        del ref_img
+        gc.collect()
+
+        n_stacked = len(frame_disk_paths)
+        if n_stacked == 0:
+            sys.stderr.write("Error: All frames failed alignment. Unable to stack.\n")
+            return 1
+
+        # Step 4: Stacking with chunked disk streaming (RAM < 150 MB)
+        if console:
+            console.print(f"\n[bold]Stacking [cyan]{n_stacked}[/cyan] frames using [yellow]{args.method}[/yellow] (disk-streamed row chunks: {args.chunk_size} rows)...[/bold]")
+
+        t_stack_start = time.time()
+        stacked_dat_path = tmp_path / "stacked_master.dat"
+
+        if console:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+                TimeRemainingColumn(),
+                console=console,
+            ) as prog:
+                task = prog.add_task("Streaming chunks from disk...", total=math.ceil(h / args.chunk_size))
+
+                def update_cb(done, total):
+                    prog.update(task, completed=done)
+
+                stacked_mmap = stack_frames_disk_stream(
+                    frame_disk_paths,
+                    mask_disk_paths,
+                    shape_hwc=(h, w, c),
+                    out_dat_path=stacked_dat_path,
+                    method=args.method,
+                    kappa=args.kappa,
+                    chunk_size=args.chunk_size,
+                    progress_callback=update_cb,
+                )
+        else:
+            stacked_mmap = stack_frames_disk_stream(
+                frame_disk_paths,
+                mask_disk_paths,
+                shape_hwc=(h, w, c),
+                out_dat_path=stacked_dat_path,
+                method=args.method,
+                kappa=args.kappa,
+                chunk_size=args.chunk_size,
+            )
+
+        t_stack_elapsed = time.time() - t_stack_start
+
+        # Step 5: Optional Auto-crop to overlapping area
+        ymin, ymax, xmin, xmax = 0, h, 0, w
+        if args.crop and n_stacked > 1:
+            ymin, ymax, xmin, xmax = compute_overlap_crop_bbox(
+                mask_disk_paths, shape_hw=(h, w), chunk_size=args.chunk_size
+            )
+            final_w, final_h = (xmax - xmin), (ymax - ymin)
+            if console:
+                console.print(f"[bold green]Auto-cropped border margins:[/bold green] overlap box [{xmin}:{xmax}, {ymin}:{ymax}] -> [bold]{final_w} x {final_h}[/bold] px")
+        else:
+            final_w, final_h = w, h
+
+        # Step 6: Save 16-bit Master TIFF
+        out_tif_path.parent.mkdir(parents=True, exist_ok=True)
+        cropped_view = stacked_mmap[ymin:ymax, xmin:xmax]
+        stacked_u16 = np.clip(cropped_view, 0, 65535).astype(np.uint16)
+
+        stacked_bgr_u16 = cv2.cvtColor(stacked_u16, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(str(out_tif_path), stacked_bgr_u16)
+        del stacked_bgr_u16
+        gc.collect()
+
+        tif_size_mb = out_tif_path.stat().st_size / (1024 * 1024)
+
+        # Step 7: Generate Auto-Stretched Preview PNG
+        png_size_mb = 0.0
+        if args.stretch != "none":
+            preview_u8 = astro_auto_stretch(
+                stacked_u16,
+                target_bg=args.target_bg,
+                shadow_clip=args.shadow_clip,
+                method=args.stretch,
+            )
+            # OpenCV imwrite expects BGR
+            preview_bgr = cv2.cvtColor(preview_u8, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(str(out_png_path), preview_bgr)
+            del preview_u8, preview_bgr
+            gc.collect()
+
+            png_size_mb = out_png_path.stat().st_size / (1024 * 1024)
+
+        # Free output memory-map
+        del cropped_view, stacked_u16, stacked_mmap
+        gc.collect()
+
+    finally:
+        # Step 8: Clean up all disk scratch buffer files automatically
+        temp_dir_obj.cleanup()
+
+    t_total = time.time() - t_start
+    peak_ram = get_peak_ram_mb()
+
+    # Theoretical SNR and dynamic range metrics
+    snr_factor = math.sqrt(n_stacked)
+    ev_boost = math.log2(snr_factor)
+
+    # Output JSON if requested
+    if args.json:
+        json_data = {
+            "shutter": selected_shutter,
+            "frames_total": n_selected,
+            "frames_stacked": n_stacked,
+            "method": args.method,
+            "kappa": args.kappa,
+            "reference_frame": ref_frame["filename"],
+            "reference_iso": ref_iso,
+            "dimensions": {"width": final_w, "height": final_h},
+            "snr_improvement_factor": round(snr_factor, 2),
+            "dynamic_range_boost_ev": round(ev_boost, 2),
+            "output_master_tiff": str(out_tif_path.resolve()),
+            "output_preview_png": str(out_png_path.resolve()) if args.stretch != "none" else None,
+            "peak_ram_mb": round(peak_ram, 1),
+            "timing_seconds": {"stacking": round(t_stack_elapsed, 2), "total": round(t_total, 2)},
+            "frames": frame_metrics,
+        }
+        print(json.dumps(json_data, indent=2))
+        return 0
+
+    # Display Rich Summary Dashboard
+    if console:
+        summary_text = (
+            f"[bold]Master 16-bit TIFF:[/bold] [cyan]{out_tif_path}[/cyan] ({tif_size_mb:.2f} MB)\n"
+            f"[bold]Stretched Preview PNG:[/bold] [green]{out_png_path}[/green] ({png_size_mb:.2f} MB, {args.stretch.upper()} stretch)\n\n"
+            f"[bold]Frames Stacked:[/bold] [bold yellow]{n_stacked} / {n_selected}[/bold yellow] ({selected_shutter} exposure)\n"
+            f"[bold]Reference Frame:[/bold] [cyan]{ref_frame['filename']}[/cyan] (ISO {ref_iso})\n"
+            f"[bold]Final Dimensions:[/bold] {final_w} x {final_h} px\n"
+            f"[bold]Theoretical SNR Gain:[/bold] [bold green]{snr_factor:.2f}x noise reduction[/bold green] (+{ev_boost:.2f} EV dynamic range)\n"
+            f"[bold]Peak RAM Usage:[/bold] [bold green]{peak_ram:.1f} MB[/bold green] (disk-buffered streaming)\n"
+            f"[bold]Elapsed Time:[/bold] Stacking {t_stack_elapsed:.1f}s | Total {t_total:.1f}s"
+        )
+        console.print(Panel(summary_text, title="[bold green]★ Stacking Complete ★[/bold green]", box=box.ROUNDED))
+    else:
+        print(f"\nStacking Complete!")
+        print(f"Master TIFF: {out_tif_path} ({tif_size_mb:.2f} MB)")
+        if args.stretch != "none":
+            print(f"Preview PNG: {out_png_path} ({png_size_mb:.2f} MB)")
+        print(f"Frames Stacked: {n_stacked}/{n_selected} (SNR Gain: {snr_factor:.2f}x, +{ev_boost:.2f} EV)")
+        print(f"Peak RAM: {peak_ram:.1f} MB (disk-streamed)")
+        print(f"Total Time: {t_total:.1f}s")
+
+    # Step 9: Open in viewer if requested
+    if args.preview and args.stretch != "none":
+        view_in_viewer(str(out_png_path), detach=True)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

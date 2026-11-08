@@ -14,8 +14,11 @@ The scripts require Python 3 and a few desktop tools depending on the utility:
 | `python-matplotlib` | Standalone LaTeX math engine and PNG rendering | `td_math2img` |
 | `wl-clipboard` (`wl-copy`) | Copying images and text to Wayland clipboard | `td_math2img` |
 | `swayimg` | Wayland-native image viewer | `td_math2img` (optional, for viewing) |
-| `exiftool` / `python-pillow` | Photographic EXIF extraction (supports RAW, DNG, NEF, JPG) | `td_exif_summary` (recommended: `exiftool`) |
-| `python-rich` | Rich terminal tables, rounded borders, and dashboard cards | `td_exif_summary` (optional, recommended) |
+| `exiftool` / `python-pillow` | Photographic EXIF extraction (supports RAW, DNG, NEF, JPG) | `td_exif_summary`, `td_astro_stack` (recommended: `exiftool`) |
+| `python-rich` | Rich terminal tables, rounded borders, and dashboard cards | `td_exif_summary`, `td_astro_stack` (optional, recommended) |
+| `python-numpy` | Vectorized numerical processing & matrix transformations | `td_astro_stack` |
+| `python-opencv` | SIFT star feature detection, RANSAC alignment & 16-bit TIFF I/O | `td_astro_stack` |
+| `python-rawpy` | LibRaw 16-bit linear sensor demosaicing (DNG, CR2, NEF, ARW) | `td_astro_stack` (for camera RAW files) |
 | `/sys/class/power_supply/` | Linux kernel battery sysfs interface | `td_battery_info`, `td_battery_watch` |
 
 ### One-line prerequisite installation
@@ -24,27 +27,27 @@ Choose the command matching your Linux distribution:
 
 - **Arch Linux / EndeavourOS / Manjaro**:
   ```bash
-  sudo pacman -S --needed python python-matplotlib wl-clipboard swayimg perl-image-exiftool python-pillow python-rich
+  sudo pacman -S --needed python python-matplotlib wl-clipboard swayimg perl-image-exiftool python-pillow python-rich python-numpy python-opencv python-rawpy
   ```
 
 - **Debian / Ubuntu / Linux Mint**:
   ```bash
-  sudo apt-get update && sudo apt-get install -y python3 python3-matplotlib wl-clipboard swayimg libimage-exiftool-perl python3-pil python3-rich
+  sudo apt-get update && sudo apt-get install -y python3 python3-matplotlib wl-clipboard swayimg libimage-exiftool-perl python3-pil python3-rich python3-numpy python3-opencv python3-rawpy
   ```
 
 - **Fedora / RHEL**:
   ```bash
-  sudo dnf install -y python3 python3-matplotlib wl-clipboard swayimg perl-Image-ExifTool python3-pillow python3-rich
+  sudo dnf install -y python3 python3-matplotlib wl-clipboard swayimg perl-Image-ExifTool python3-pillow python3-rich python3-numpy python3-opencv python3-rawpy
   ```
 
 - **openSUSE**:
   ```bash
-  sudo zypper install -y python3 python3-matplotlib wl-clipboard swayimg exiftool python3-Pillow python3-rich
+  sudo zypper install -y python3 python3-matplotlib wl-clipboard swayimg exiftool python3-Pillow python3-rich python3-numpy python3-opencv python3-rawpy
   ```
 
 - **Void Linux**:
   ```bash
-  sudo xbps-install -Sy python3 python3-matplotlib wl-clipboard swayimg exiftool python3-Pillow python3-rich
+  sudo xbps-install -Sy python3 python3-matplotlib wl-clipboard swayimg exiftool python3-Pillow python3-rich python3-numpy python3-opencv python3-rawpy
   ```
 
 ---
@@ -530,7 +533,73 @@ td_exif_summary -j | jq '.summary.iso_distribution'
 
 ---
 
-### 8. `td_template`
+### 8. `td_astro_stack`
+
+Astrophotography RAW & Image Stacker with sub-pixel star alignment (SIFT + RANSAC), ISO exposure normalization, and ultra-low RAM disk-buffered streaming (`np.memmap`).
+
+Designed for astrophotographers who take tripod or tracker sequences across identical shutter speeds and varying ISO levels to capture the night sky. Automatically groups photos by shutter speed, aligns celestial drift, normalizes exposure gain so that pristine low-noise shadow data from lower ISOs blends seamlessly into the high-ISO baseline, and stacks frames using chunked sigma-clipping outlier rejection to eliminate satellite trails, aircraft, hot pixels, and cosmic rays.
+
+Outputs a **16-bit linear master TIFF** (ideal for post-processing in Siril, PixInsight, RawTherapee, Photoshop, or GIMP) and an **auto-stretched 8-bit preview PNG** using Midtone Transfer Function (MTF) or Arcsinh stretching.
+
+#### Key Features
+
+- **Smart Shutter Speed Grouping**: Scans a folder or file list and automatically groups exposures by shutter speed (e.g. `32s`, `10s`, `1/4s`), defaulting to the largest group if `--shutter` is omitted.
+- **Maximum Detail ISO Normalization**: Automatically chooses the **highest ISO frame** as the reference baseline (e.g. ISO 3200) to expose deep shadow details, Milky Way dust lanes, and faint stars. All lower ISO frames are scaled up linearly ($gain = ISO_{ref} / ISO_{i}$), boosting shadow data from clean low-ISO frames without introducing amplifier noise.
+- **Sub-Pixel Star Alignment**: High-speed SIFT feature detection and RANSAC affine registration (`cv2.estimateAffinePartial2D`) detects thousands of stars and computes rotation and sub-pixel drift without warping star shapes.
+- **Ultra-Low RAM Architecture**: Writes warped frames directly to disk memory-mapped scratch buffers (`np.memmap`) and processes row chunks (default: 256 rows). Peak RAM usage remains minimal even when stacking dozens or hundreds of high-resolution RAW frames. All temporary files are automatically cleaned up on completion.
+- **Outlier Rejection**: Configurable sigma-clipping ($\kappa = 2.5$), median, or mean stacking to remove satellite streaks, airplanes, meteors, and cosmic ray hits.
+- **Auto-Cropping (`--crop`)**: Automatically calculates the overlapping bounding box where all frames intersect and crops non-overlapping borders.
+- **Auto-Stretch Preview & Viewer Integration**: Generates an 8-bit preview PNG stretched using PixInsight's standard Midtone Transfer Function (MTF) or Arcsinh stretch, and opens it directly in `swayimg` via `-p` / `--preview`.
+
+#### Usage Examples
+
+```bash
+# Auto-detect largest shutter group in directory and stack
+td_astro_stack /path/to/raws/
+
+# Stack photos taken specifically at 32 seconds exposure
+td_astro_stack -s 32s /path/to/raws/
+
+# Fast half-size preview stack, auto-crop borders, and preview in swayimg
+td_astro_stack -s 32s --fast --crop --preview
+
+# Use median stacking with custom output file
+td_astro_stack -s 32s -m median -o master_milkyway.tif
+
+# Dry run inspection of shutter speed groups and ISO range
+td_astro_stack /path/to/raws/ --dry-run
+
+# Output full alignment metrics in JSON
+td_astro_stack -s 32s -j | jq '.snr_improvement_factor'
+```
+
+#### Options Reference
+
+| Option | Description |
+|---|---|
+| `PATH` | Input directory, image file paths, or glob pattern (default: `.`). |
+| `-s, --shutter SEC` | Target shutter speed to stack (e.g. `32s`, `32`, `10s`, `1/4s`). Auto-selects largest group if omitted. |
+| `--ref INDEX_OR_NAME` | Reference frame (1-based index or filename). Default: auto-selects via `--ref-mode`. |
+| `--ref-mode MODE` | Reference frame selection strategy: `highest` (default: highest ISO reveals maximum shadow detail & dynamic range), `median`, or `lowest`. |
+| `--align MODE` | Transform mode: `rigid` (Euclidean rotation + translation, default), `homography`, or `none`. |
+| `--no-iso-gain` | Disable automatic ISO exposure gain scaling. |
+| `-m, --method METHOD` | Stacking method: `sigma-clip` (default, rejects satellite trails & hot pixels), `median`, or `mean`. |
+| `-k, --kappa NUM` | Sigma-clipping threshold multiplier $\kappa$ (default: `2.5`). |
+| `--crop` | Auto-crop output to the intersection bounding box where all frames overlap. |
+| `--fast, --half-size` | Half-size processing mode for ultra-fast stacking and test previews. |
+| `--chunk-size ROWS` | Row chunk size during stacking to constrain RAM usage (default: `256` rows). |
+| `--temp-dir DIR` | Custom directory for disk scratch buffers / memmap files (default: system `/tmp`). |
+| `-o, --output FILE` | Output 16-bit master TIFF filename (default: `stack_<shutter>_<N>frames.tif`). |
+| `--stretch ALGO` | Auto-stretch algorithm for 8-bit preview PNG: `mtf` (default), `asinh`, `linear`, or `none`. |
+| `--target-bg FLOAT` | Target sky background brightness for MTF stretch (default: `0.15`). |
+| `-p, -v, --preview` | Automatically open stretched preview in `swayimg` or default image viewer. |
+| `--dry-run` | Scan and display shutter speed groups and alignment plan without processing. |
+| `-j, --json` | Output results and alignment metrics in JSON format. |
+| `-q, --quiet` | Suppress progress output and non-essential logs. |
+
+---
+
+### 9. `td_template`
 
 Starter skeleton template for creating new `td_*` utilities. Includes built-in `argparse` setup, JSON output support, ANSI color management, standard input handling, and exit code handling.
 
