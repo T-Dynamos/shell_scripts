@@ -54,6 +54,12 @@ except ImportError:
     HAS_PILLOW = False
 
 try:
+    import astroalign as aa
+    HAS_ASTROALIGN = True
+except ImportError:
+    HAS_ASTROALIGN = False
+
+try:
     from rich.console import Console
     from rich.table import Table
     from rich.panel import Panel
@@ -999,10 +1005,15 @@ def main() -> int:
             console.print(f"Memory Management: [bold green]Ultra-Low RAM mode enabled (disk streaming via {tmp_path})[/bold green]")
 
         # Extract reference star keypoints (focused on sky region to avoid locking onto ground/monastery)
+        split_y = int(h * args.sky_ratio) if args.align_target == "stars" else h
+        ref_sky = None
+        if HAS_ASTROALIGN and args.align_target == "stars" and args.align != "none":
+            ref_sky = np.ascontiguousarray(ref_img[:split_y, :, 1], dtype=np.float64)
+
         pts_ref, des_ref = extract_star_features(
             ref_img, n_features=3000, sky_ratio=args.sky_ratio, target=args.align_target
         )
-        if len(pts_ref) < 10 and args.align != "none":
+        if len(pts_ref) < 10 and args.align != "none" and not (HAS_ASTROALIGN and args.align_target == "stars"):
             sys.stderr.write(f"Warning: Only {len(pts_ref)} star keypoints detected on reference frame. Alignment accuracy may be reduced.\n")
 
         matcher = cv2.BFMatcher(cv2.NORM_L2) if args.align != "none" else None
@@ -1054,6 +1065,7 @@ def main() -> int:
                 frame_disk_paths.append(frame_dat)
                 mask_disk_paths.append(mask_dat)
 
+                ref_stars_info = "Astroalign Ref" if (HAS_ASTROALIGN and args.align_target == "stars") else f"{len(pts_ref)} stars"
                 frame_metrics.append({
                     "index": i + 1,
                     "filename": fname,
@@ -1068,7 +1080,7 @@ def main() -> int:
                 })
                 if align_table:
                     align_table.add_row(
-                        str(i + 1), fname, str(f_iso), f"{gain:.2f}x", f"{len(pts_ref)} stars", "0.0, 0.0 px", "0.00°", "[bold cyan]REFERENCE[/bold cyan]"
+                        str(i + 1), fname, str(f_iso), f"{gain:.2f}x", ref_stars_info, "0.0, 0.0 px", "0.00°", "[bold cyan]REFERENCE[/bold cyan]"
                     )
                 continue
 
@@ -1091,14 +1103,37 @@ def main() -> int:
                 matches_count, inliers_count, dx, dy, theta = 0, 0, 0.0, 0.0, 0.0
                 status_str = "ALIGNED (NONE)"
             else:
-                pts_curr, des_curr = extract_star_features(
-                    curr_scaled, n_features=3000, sky_ratio=args.sky_ratio, target=args.align_target
-                )
-                M, matches_count, inliers_count, dx, dy, theta = align_frame(
-                    pts_curr, des_curr, pts_ref, des_ref, matcher, mode=args.align
-                )
+                M = None
+                matches_count, inliers_count, dx, dy, theta = 0, 0, 0.0, 0.0, 0.0
 
-                if M is None or inliers_count < 8:
+                # Primary: Astroalign asterism matching for stellar fields
+                if HAS_ASTROALIGN and args.align_target == "stars" and ref_sky is not None:
+                    try:
+                        curr_sky = np.ascontiguousarray(curr_scaled[:split_y, :, 1], dtype=np.float64)
+                        t, (s_pos, t_pos) = aa.find_transform(curr_sky, ref_sky, max_control_points=70, detection_sigma=3.0)
+                        inliers_count = len(s_pos)
+                        matches_count = len(s_pos)
+                        dx = float(t.translation[0])
+                        dy = float(t.translation[1])
+                        theta = float(np.degrees(t.rotation))
+                        if args.align == "homography" and inliers_count >= 4:
+                            H, _ = cv2.findHomography(s_pos, t_pos, cv2.RANSAC, 3.0)
+                            M = H if H is not None else t.params[:2, :].astype(np.float32)
+                        else:
+                            M = t.params[:2, :].astype(np.float32)
+                    except Exception:
+                        M = None
+
+                # Fallback to OpenCV SIFT if Astroalign failed or target is ground
+                if M is None or inliers_count < 4:
+                    pts_curr, des_curr = extract_star_features(
+                        curr_scaled, n_features=3000, sky_ratio=args.sky_ratio, target=args.align_target
+                    )
+                    M, matches_count, inliers_count, dx, dy, theta = align_frame(
+                        pts_curr, des_curr, pts_ref, des_ref, matcher, mode=args.align
+                    )
+
+                if M is None or inliers_count < 4:
                     if align_table:
                         align_table.add_row(
                             str(i + 1), fname, str(f_iso), f"{gain:.2f}x", f"{matches_count} matches", "-", "-", "[bold red]FAILED[/bold red]"
@@ -1119,7 +1154,8 @@ def main() -> int:
                     gc.collect()
                     continue
 
-                warped, mask_bool = warp_image_and_mask(curr_scaled, M, (h, w), mode=args.align)
+                mode_to_use = "homography" if (args.align == "homography" and M.shape == (3, 3)) else "rigid"
+                warped, mask_bool = warp_image_and_mask(curr_scaled, M, (h, w), mode=mode_to_use)
                 mask = mask_bool.astype(np.uint8)
                 status_str = "ALIGNED"
 
