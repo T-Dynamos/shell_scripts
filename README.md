@@ -433,6 +433,13 @@ Scans image files in the current or specified directory and extracts photographi
   - Top apertures ($f$-numbers) and focal lengths.
   - Date and time span of the photo shoot.
   - Camera models, lens breakdown, and geotag percentages.
+- **Streamlined Default Columns**: Focuses cleanly on core photographic settings (`File`, `Lens`, `Focal`, `Shutter`, `Aperture`, `ISO`, `EV`, `Resolution`, `Size`). Secondary columns (`Date/Time`, `Camera`, `Mode`, `Flash`) are omitted by default for clean horizontal alignment and can be toggled on as needed.
+- **Column Toggle Flags**:
+  - `--full, --all`: Display all columns including `Date/Time`, `Camera`, `Mode`, and `Flash`.
+  - `--date, --time`: Include `Date / Time` column.
+  - `--camera`: Include `Camera` model column.
+  - `--mode`: Include `Mode` (Exposure Mode / Program) column.
+  - `--flash`: Include `Flash` status column.
 - **Flexible Display Modes**:
   - Full view: File table + Statistics dashboard.
   - `-s, --summary-only`: Print only the aggregate photographic stats dashboard.
@@ -499,6 +506,11 @@ td_exif_summary -j | jq '.summary.iso_distribution'
 | Option | Description |
 |---|---|
 | `PATH` | Target image file or directory to scan (default: current directory `.`). |
+| `--full, --all` | Display all columns in table (including Date/Time, Camera, Mode, Flash). |
+| `--date, --time` | Include Date / Time column in table (omitted by default). |
+| `--camera` | Include Camera model column in table (omitted by default). |
+| `--mode` | Include Exposure Mode column in table (omitted by default). |
+| `--flash` | Include Flash status column in table (omitted by default). |
 | `-b, --bare` | Output only bare image file paths (one per line, without tables or decoration) for easy copy-pasting. |
 | `--shutter` | Sort images by shutter speed and output them bare (convenience shortcut for `--sort shutter --bare`). |
 | `--filenames` | When in bare mode, output only base filenames instead of directory paths. |
