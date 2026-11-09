@@ -12,6 +12,20 @@ import json
 import argparse
 from pathlib import Path
 
+# Resolve shared data directory and insert into sys.path
+_DATA_DIR = Path(__file__).resolve().parent / "td_script_data"
+if not _DATA_DIR.is_dir():
+    _DATA_DIR = Path.home() / ".local" / "bin" / "td_script_data"
+if str(_DATA_DIR) not in sys.path:
+    sys.path.insert(0, str(_DATA_DIR))
+
+from common import (
+    format_size,
+    parse_duration,
+    Colors,
+    supports_color,
+)
+
 DEFAULT_EXTENSIONS = {
     ".png",
     ".jpg",
@@ -31,26 +45,6 @@ DEFAULT_PREFIXES = (
     "swayimg-",
     "test_",
 )
-
-
-def format_size(bytes_num: int) -> str:
-    """Format bytes into human-readable size."""
-    for unit in ["B", "KB", "MB", "GB"]:
-        if bytes_num < 1024.0 or unit == "GB":
-            return f"{bytes_num:.1f} {unit}" if unit != "B" else f"{bytes_num} B"
-        bytes_num /= 1024.0
-    return f"{bytes_num:.1f} GB"
-
-
-def parse_duration(s: str) -> float:
-    """Parse a duration string like '30m', '2h', '1d', '60s' into seconds."""
-    match = re.match(r"^(\d+(?:\.\d+)?)\s*([smhd]?)$", s.strip().lower())
-    if not match:
-        raise ValueError(f"Invalid duration format: '{s}'. Use e.g. '30m', '2h', '1d'.")
-    val, unit = match.groups()
-    val = float(val)
-    multiplier = {"s": 1, "m": 60, "h": 3600, "d": 86400}.get(unit or "s", 1)
-    return val * multiplier
 
 
 def find_temp_images(

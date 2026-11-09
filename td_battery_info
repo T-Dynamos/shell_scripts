@@ -11,44 +11,21 @@ import json
 import argparse
 from pathlib import Path
 
-DEFAULT_POWER_SUPPLY_DIR = "/sys/class/power_supply"
+# Resolve shared data directory and insert into sys.path
+_DATA_DIR = Path(__file__).resolve().parent / "td_script_data"
+if not _DATA_DIR.is_dir():
+    _DATA_DIR = Path.home() / ".local" / "bin" / "td_script_data"
+if str(_DATA_DIR) not in sys.path:
+    sys.path.insert(0, str(_DATA_DIR))
 
-
-def find_batteries() -> list[str]:
-    """Find all battery device names available in sysfs."""
-    paths = glob.glob(os.path.join(DEFAULT_POWER_SUPPLY_DIR, "BAT*"))
-    if not paths:
-        # Fallback search for any power supply of type Battery
-        for p in glob.glob(os.path.join(DEFAULT_POWER_SUPPLY_DIR, "*")):
-            type_file = os.path.join(p, "type")
-            if os.path.isfile(type_file):
-                try:
-                    with open(type_file) as f:
-                        if f.read().strip().lower() == "battery":
-                            paths.append(p)
-                except OSError:
-                    pass
-    return sorted([os.path.basename(p) for p in paths])
-
-
-def read_sysfs_int(path: Path) -> int | None:
-    """Read an integer value from a sysfs file, or None if unavailable."""
-    if not path.is_file():
-        return None
-    try:
-        return int(path.read_text().strip())
-    except (ValueError, OSError):
-        return None
-
-
-def read_sysfs_str(path: Path) -> str | None:
-    """Read a string value from a sysfs file, or None if unavailable."""
-    if not path.is_file():
-        return None
-    try:
-        return path.read_text().strip()
-    except OSError:
-        return None
+from common import (
+    DEFAULT_POWER_SUPPLY_DIR,
+    find_batteries,
+    read_sysfs_int,
+    read_sysfs_str,
+    Colors,
+    supports_color,
+)
 
 
 def get_battery_metrics(bat_dir: Path, factor: float = 80 * 0.998) -> dict:

@@ -9,63 +9,17 @@ import os
 import json
 import shutil
 import argparse
+from pathlib import Path
 
-SCRIPTS = {
-    "td_math2img": {
-        "title": "LaTeX Math to Image (PNG/SVG) & Clipboard",
-        "summary": "Render LaTeX math expressions to high-res images (PNG/SVG), copy to Wayland clipboard with wl-copy, and preview in swayimg.",
-        "example": "td_math2img --save formula.png '\\frac{-b \\pm \\sqrt{b^2-4ac}}{2a}'",
-        "category": "Graphics & Math",
-    },
-    "td_battery_info": {
-        "title": "Battery Diagnostics & Health",
-        "summary": "Display battery health percentage, full/design capacity in mAh, and CC phase charging current estimate.",
-        "example": "td_battery_info --short",
-        "category": "System & Hardware",
-    },
-    "td_battery_watch": {
-        "title": "Live Terminal Battery Monitor",
-        "summary": "Real-time dashboard tracking battery charge, charge/discharge rate in mA/W, progress bar, and time remaining.",
-        "example": "td_battery_watch -i 1.0",
-        "category": "System & Hardware",
-    },
-    "td_tmp_clean": {
-        "title": "Temp Image Cleaner",
-        "summary": "Clean temporary images and math renders from /tmp with dry-run and age filters.",
-        "example": "td_tmp_clean --dry-run",
-        "category": "Maintenance & Cleanup",
-    },
-    "td_script_info": {
-        "title": "Scripts Catalog & Quick Help",
-        "summary": "Summarize all td_* scripts with one-line descriptions, categories, and command examples.",
-        "example": "td_script_info",
-        "category": "Meta & Help",
-    },
-    "td_fish_completions": {
-        "title": "Fish Shell Completions Generator",
-        "summary": "Dynamically inspect, generate, and install smart Fish shell completions for all td_* scripts.",
-        "example": "td_fish_completions",
-        "category": "Shell & Completion",
-    },
-    "td_exif_summary": {
-        "title": "Photo EXIF Scanner & Statistics",
-        "summary": "Scan images and summarize photographic EXIF metadata (ISO, Shutter, Aperture, Lenses, Camera models).",
-        "example": "td_exif_summary -r /path/to/photos",
-        "category": "Photography & Media",
-    },
-    "td_astro_stack": {
-        "title": "Astrophotography RAW & Image Stacker",
-        "summary": "Stack same shutter speed photos with sub-pixel star alignment (SIFT) and ISO normalization to reduce noise.",
-        "example": "td_astro_stack -s 32s --crop --preview",
-        "category": "Photography & Media",
-    },
-    "td_template": {
-        "title": "Starter Skeleton Template",
-        "summary": "Starter template with argparse, colors, JSON output, and error handling for creating new td_* scripts.",
-        "example": "td_template 'hello world' --json",
-        "category": "Meta & Template",
-    },
-}
+# Resolve shared data directory and insert into sys.path
+_DATA_DIR = Path(__file__).resolve().parent / "td_script_data"
+if not _DATA_DIR.is_dir():
+    _DATA_DIR = Path.home() / ".local" / "bin" / "td_script_data"
+if str(_DATA_DIR) not in sys.path:
+    sys.path.insert(0, str(_DATA_DIR))
+
+from catalog import SCRIPTS
+from common import Colors, supports_color
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""Examples:
   %(prog)s
-  %(prog)s td_math2png
+  %(prog)s td_math2img
   %(prog)s --compact
   %(prog)s --json
 """,
@@ -115,7 +69,7 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    use_color = sys.stdout.isatty() and not args.no_color
+    use_color = supports_color(args.no_color)
 
     # Filter target scripts
     targets = {args.script: SCRIPTS[args.script]} if args.script else SCRIPTS
@@ -131,12 +85,12 @@ def main() -> int:
         print(json.dumps(result, indent=2))
         return 0
 
-    cyan = "\033[1;36m" if use_color else ""
-    green = "\033[1;32m" if use_color else ""
-    yellow = "\033[1;33m" if use_color else ""
-    bold = "\033[1m" if use_color else ""
-    dim = "\033[2m" if use_color else ""
-    reset = "\033[0m" if use_color else ""
+    cyan = Colors.BOLD_CYAN if use_color else ""
+    green = Colors.BOLD_GREEN if use_color else ""
+    yellow = Colors.BOLD_YELLOW if use_color else ""
+    bold = Colors.BOLD if use_color else ""
+    dim = Colors.DIM if use_color else ""
+    reset = Colors.RESET if use_color else ""
 
     if args.compact:
         max_name_len = max(len(name) for name in targets)
@@ -160,7 +114,7 @@ def main() -> int:
 
     print(f"\n{cyan}--------------------------------------------------------------------------------{reset}")
     print(f"{dim}To install/update all scripts to ~/.local/bin:{reset}")
-    print(f"  mkdir -p ~/.local/bin && install -m 755 td_* ~/.local/bin/\n")
+    print(f"  ./install.sh\n")
 
     return 0
 

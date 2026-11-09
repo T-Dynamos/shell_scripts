@@ -28,6 +28,27 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+# Resolve shared data directory and insert into sys.path
+_DATA_DIR = Path(__file__).resolve().parent / "td_script_data"
+if not _DATA_DIR.is_dir():
+    _DATA_DIR = Path.home() / ".local" / "bin" / "td_script_data"
+if str(_DATA_DIR) not in sys.path:
+    sys.path.insert(0, str(_DATA_DIR))
+
+from common import (
+    format_bytes,
+    Colors,
+    supports_color,
+)
+from exif import (
+    IMAGE_EXTENSIONS,
+    RAW_EXTENSIONS,
+    parse_shutter_seconds,
+    format_shutter,
+    extract_metadata_exiftool,
+    extract_metadata_fallback,
+)
+
 # Optional external dependencies with graceful informative error handling
 try:
     import numpy as np
@@ -70,15 +91,6 @@ try:
 except ImportError:
     HAS_RICH = False
 
-IMAGE_EXTENSIONS = {
-    ".dng", ".cr2", ".cr3", ".nef", ".arw", ".raw", ".orf", ".rw2", ".pef",
-    ".tif", ".tiff", ".png", ".jpg", ".jpeg", ".webp"
-}
-
-RAW_EXTENSIONS = {
-    ".dng", ".cr2", ".cr3", ".nef", ".arw", ".raw", ".orf", ".rw2", ".pef"
-}
-
 
 def get_peak_ram_mb() -> float:
     """Return peak resident memory usage (RSS) in megabytes."""
@@ -87,92 +99,6 @@ def get_peak_ram_mb() -> float:
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
     except Exception:
         return 0.0
-
-
-def parse_shutter_seconds(val: Any) -> float | None:
-    """Parse exposure time string or number into seconds as float."""
-    if val is None:
-        return None
-    if isinstance(val, (int, float)):
-        return float(val) if val > 0 else None
-    s = str(val).strip().rstrip("s")
-    if "/" in s:
-        parts = s.split("/")
-        if len(parts) == 2:
-            try:
-                num = float(parts[0])
-                denom = float(parts[1])
-                return (num / denom) if denom != 0 else None
-            except ValueError:
-                return None
-    try:
-        f = float(s)
-        return f if f > 0 else None
-    except ValueError:
-        return None
-
-
-def format_shutter(sec: float | None) -> str:
-    """Format exposure time in seconds to human readable string (e.g. 32s, 1/50s)."""
-    if sec is None or sec <= 0:
-        return "Unknown"
-    if sec >= 1.0:
-        return f"{sec:g}s"
-    denom = round(1.0 / sec)
-    return f"1/{denom}s"
-
-
-def extract_metadata_exiftool(file_paths: list[str]) -> list[dict[str, Any]]:
-    """Extract exposure time, ISO, FNumber, and camera model using exiftool."""
-    exiftool_bin = shutil.which("exiftool")
-    if not exiftool_bin or not file_paths:
-        return []
-
-    cmd = [
-        exiftool_bin,
-        "-json",
-        "-n",
-        "-q",
-        "-q",
-        "-SourceFile",
-        "-ExposureTime",
-        "-ISO",
-        "-FNumber",
-        "-Model",
-        "-DateTimeOriginal",
-    ] + file_paths
-
-    try:
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-        return json.loads(res.stdout)
-    except Exception:
-        return []
-
-
-def extract_metadata_fallback(file_paths: list[str]) -> list[dict[str, Any]]:
-    """Extract basic photographic metadata using Pillow or rawpy if exiftool is unavailable."""
-    records = []
-    for fp in file_paths:
-        rec: dict[str, Any] = {"SourceFile": fp, "ExposureTime": None, "ISO": None, "FNumber": None, "Model": None}
-        if HAS_PILLOW:
-            try:
-                with Image.open(fp) as img:
-                    exif_data = img._getexif() if hasattr(img, "_getexif") else None
-                    if exif_data:
-                        for tag_id, val in exif_data.items():
-                            tag = ExifTags.TAGS.get(tag_id, tag_id)
-                            if tag == "ExposureTime":
-                                rec["ExposureTime"] = parse_shutter_seconds(val)
-                            elif tag == "ISOSpeedRatings":
-                                rec["ISO"] = int(val) if isinstance(val, (int, float)) else None
-                            elif tag == "FNumber":
-                                rec["FNumber"] = float(val) if isinstance(val, (int, float)) else None
-                            elif tag == "Model":
-                                rec["Model"] = str(val).strip()
-            except Exception:
-                pass
-        records.append(rec)
-    return records
 
 
 def scan_images(paths_input: list[str]) -> list[dict[str, Any]]:

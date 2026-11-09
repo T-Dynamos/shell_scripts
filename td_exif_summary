@@ -22,6 +22,30 @@ from datetime import datetime
 from collections import Counter
 from statistics import median, mean
 
+# Resolve shared data directory and insert into sys.path
+_DATA_DIR = Path(__file__).resolve().parent / "td_script_data"
+if not _DATA_DIR.is_dir():
+    _DATA_DIR = Path.home() / ".local" / "bin" / "td_script_data"
+if str(_DATA_DIR) not in sys.path:
+    sys.path.insert(0, str(_DATA_DIR))
+
+from common import (
+    format_bytes,
+    format_span,
+    make_bar,
+    Colors,
+    supports_color,
+)
+from exif import (
+    IMAGE_EXTENSIONS,
+    RAW_EXTENSIONS,
+    parse_shutter_seconds,
+    format_shutter,
+    format_aperture,
+    format_focal,
+    format_ev,
+)
+
 try:
     from rich.console import Console
     from rich.table import Table
@@ -37,130 +61,6 @@ try:
     HAS_PILLOW = True
 except ImportError:
     HAS_PILLOW = False
-
-IMAGE_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff",
-    ".dng", ".nef", ".cr2", ".cr3", ".arw", ".raw", ".orf", ".rw2", ".pef"
-}
-
-
-def parse_shutter_seconds(val) -> float | None:
-    """Parse exposure time string or number into seconds as float."""
-    if val is None:
-        return None
-    if isinstance(val, (int, float)):
-        return float(val) if val > 0 else None
-    s = str(val).strip().rstrip("s")
-    if "/" in s:
-        parts = s.split("/")
-        if len(parts) == 2:
-            try:
-                num = float(parts[0])
-                denom = float(parts[1])
-                return (num / denom) if denom != 0 else None
-            except ValueError:
-                return None
-    try:
-        f = float(s)
-        return f if f > 0 else None
-    except ValueError:
-        return None
-
-
-def format_shutter(sec: float | None, orig_str: str | None = None) -> str:
-    """Format exposure time in seconds to standard photography notation (e.g. 1/250s, 32s)."""
-    if sec is None:
-        if orig_str:
-            s = str(orig_str).strip()
-            return f"{s}s" if not s.endswith("s") else s
-        return "N/A"
-    if sec < 0.3:
-        denom = round(1.0 / sec)
-        return f"1/{denom}s"
-    elif sec == int(sec):
-        return f"{int(sec)}s"
-    else:
-        return f"{sec:.1f}s"
-
-
-def format_aperture(fnum: float | None) -> str:
-    """Format f-number to standard notation (e.g. f/2.8, f/8.0)."""
-    if fnum is None or fnum <= 0:
-        return "N/A"
-    return f"f/{fnum:.1f}" if fnum % 1 != 0 else f"f/{int(fnum)}"
-
-
-def format_focal(focal: float | None, focal_35mm: int | float | None = None) -> str:
-    """Format focal length (e.g. 70mm or 70mm (105mm eq))."""
-    if focal is None or focal <= 0:
-        return "N/A"
-    base = f"{focal:.1f}mm" if (focal % 1 != 0 and focal < 10) else f"{int(round(focal))}mm"
-    if focal_35mm and float(focal_35mm) > 0 and abs(float(focal_35mm) - focal) > 1:
-        eq_val = int(round(float(focal_35mm)))
-        return f"{base} ({eq_val}mm)"
-    return base
-
-
-def format_ev(ev) -> str:
-    """Format exposure bias value in EV (e.g. 0.0 EV, -0.7 EV, +1.3 EV)."""
-    if ev is None:
-        return "0.0"
-    if isinstance(ev, (int, float)):
-        sign = "+" if ev > 0 else ""
-        return f"{sign}{ev:.1f}"
-    s = str(ev).strip()
-    if s in ["0", "0.0", "0/1", "+0"]:
-        return "0.0"
-    if "/" in s:
-        try:
-            parts = s.split("/")
-            val = float(parts[0]) / float(parts[1])
-            sign = "+" if val > 0 else ""
-            return f"{sign}{val:.1f}"
-        except Exception:
-            return s
-    try:
-        f = float(s)
-        sign = "+" if f > 0 else ""
-        return f"{sign}{f:.1f}"
-    except Exception:
-        return s
-
-
-def format_bytes(bytes_count: int | None) -> str:
-    """Format file size in human readable units."""
-    if bytes_count is None or bytes_count < 0:
-        return "N/A"
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if bytes_count < 1024.0 or unit == "TB":
-            return f"{bytes_count:.1f} {unit}" if unit in ["MB", "GB", "TB"] else f"{int(bytes_count)} {unit}"
-        bytes_count /= 1024.0
-    return f"{bytes_count:.1f} MB"
-
-
-def format_span(td) -> str:
-    """Format a timedelta span into human-readable duration."""
-    total_sec = int(td.total_seconds())
-    if total_sec < 60:
-        return f"{total_sec}s"
-    minutes = total_sec // 60
-    if minutes < 60:
-        rem_sec = total_sec % 60
-        return f"{minutes}m {rem_sec}s" if rem_sec else f"{minutes}m"
-    hours = minutes // 60
-    rem_min = minutes % 60
-    if hours < 24:
-        return f"{hours}h {rem_min}m" if rem_min else f"{hours}h"
-    days = hours // 24
-    rem_hours = hours % 24
-    return f"{days}d {rem_hours}h" if rem_hours else f"{days}d"
-
-
-def make_bar(ratio: float, width: int = 15) -> str:
-    """Render a horizontal progress bar."""
-    filled = int(round(ratio * width))
-    filled = max(0, min(width, filled))
-    return "█" * filled + "░" * (width - filled)
 
 
 def normalize_datetime(dt_str: str | None) -> tuple[str | None, datetime | None]:

@@ -13,6 +13,16 @@ import argparse
 import tempfile
 import subprocess
 from datetime import datetime
+from pathlib import Path
+
+# Resolve shared data directory and insert into sys.path
+_DATA_DIR = Path(__file__).resolve().parent / "td_script_data"
+if not _DATA_DIR.is_dir():
+    _DATA_DIR = Path.home() / ".local" / "bin" / "td_script_data"
+if str(_DATA_DIR) not in sys.path:
+    sys.path.insert(0, str(_DATA_DIR))
+
+from common import get_data_file, Colors, supports_color
 
 try:
     import matplotlib as mpl
@@ -30,11 +40,8 @@ except ImportError:
 
 def find_latin_modern_fonts() -> dict[str, str]:
     """Locate bundled or system Latin Modern (Unicode Computer Modern) OpenType fonts."""
-    script_dir = os.path.dirname(os.path.realpath(__file__))
     search_dirs = [
-        os.path.join(script_dir, "td_script_data", "fonts"),
-        os.path.join(script_dir, "..", "td_script_data", "fonts"),
-        os.path.expanduser("~/.local/bin/td_script_data/fonts"),
+        str(get_data_file("fonts")),
         os.path.expanduser("~/.local/share/fonts"),
         "/usr/share/fonts/OTF",
         "/usr/share/fonts/latin-modern",

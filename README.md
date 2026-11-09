@@ -77,16 +77,48 @@ curl -fsSL https://raw.githubusercontent.com/T-Dynamos/shell_scripts/main/instal
 
 ### 3. If Cloned Locally
 
-If you have cloned the repository locally:
+If you have cloned the repository locally, run the bundled installer:
 
 ```bash
-mkdir -p ~/.local/bin && install -m 755 -v td_* ~/.local/bin/
+./install.sh
+```
+
+Or manually install scripts and shared data:
+```bash
+mkdir -p ~/.local/bin && install -m 755 -v td_* ~/.local/bin/ && cp -r td_script_data ~/.local/bin/
 ```
 
 > **Tip (Symlink install)**: If you develop scripts or `git pull` frequently, you can symlink them so updates take effect immediately:
 > ```bash
-> mkdir -p ~/.local/bin && ln -sf "$PWD"/td_* ~/.local/bin/
+> mkdir -p ~/.local/bin && ln -sf "$PWD"/td_* ~/.local/bin/ && ln -sfn "$PWD"/td_script_data ~/.local/bin/td_script_data
 > ```
+
+---
+
+## Modular Architecture (`td_script_data`)
+
+The repository is organized modularly with shared Python modules and assets located inside [`td_script_data/`](td_script_data/):
+
+* **`common.py`**: Shared core utilities — ANSI terminal styling (`Colors`, `supports_color`), progress bars (`make_bar`, `make_progress_bar`), human-readable data formatters (`format_bytes`, `format_time`, `format_span`, `parse_duration`), hardware sysfs helpers (`find_batteries`, `read_sysfs_int`, `read_sysfs_str`), and data file path resolution (`get_data_dir`, `get_data_file`).
+* **`exif.py`**: Shared photographic metadata extraction and formatting — `parse_shutter_seconds`, `format_shutter`, `format_aperture`, `format_focal`, `format_ev`, `extract_metadata_exiftool`, `extract_metadata_fallback`, and supported format extension sets (`IMAGE_EXTENSIONS`, `RAW_EXTENSIONS`).
+* **`catalog.py`**: Central registry of all scripts, metadata, categories, and command examples (`SCRIPTS`).
+
+All scripts dynamically resolve `td_script_data` at the top via `sys.path.insert(0, ...)` and import modules directly:
+```python
+import sys
+from pathlib import Path
+
+# Resolve shared data directory and insert into sys.path
+_DATA_DIR = Path(__file__).resolve().parent / "td_script_data"
+if not _DATA_DIR.is_dir():
+    _DATA_DIR = Path.home() / ".local" / "bin" / "td_script_data"
+if str(_DATA_DIR) not in sys.path:
+    sys.path.insert(0, str(_DATA_DIR))
+
+from common import Colors, supports_color, format_bytes
+from exif import parse_shutter_seconds, format_shutter
+from catalog import SCRIPTS
+```
 
 ---
 

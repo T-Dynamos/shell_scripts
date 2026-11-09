@@ -13,76 +13,23 @@ import atexit
 import argparse
 from pathlib import Path
 
-DEFAULT_POWER_SUPPLY_DIR = "/sys/class/power_supply"
+# Resolve shared data directory and insert into sys.path
+_DATA_DIR = Path(__file__).resolve().parent / "td_script_data"
+if not _DATA_DIR.is_dir():
+    _DATA_DIR = Path.home() / ".local" / "bin" / "td_script_data"
+if str(_DATA_DIR) not in sys.path:
+    sys.path.insert(0, str(_DATA_DIR))
 
-
-def find_batteries() -> list[str]:
-    """Find all battery device names available in sysfs."""
-    paths = glob.glob(os.path.join(DEFAULT_POWER_SUPPLY_DIR, "BAT*"))
-    if not paths:
-        for p in glob.glob(os.path.join(DEFAULT_POWER_SUPPLY_DIR, "*")):
-            type_file = os.path.join(p, "type")
-            if os.path.isfile(type_file):
-                try:
-                    with open(type_file) as f:
-                        if f.read().strip().lower() == "battery":
-                            paths.append(p)
-                except OSError:
-                    pass
-    return sorted([os.path.basename(p) for p in paths])
-
-
-def read_int(path: Path) -> int | None:
-    """Read an integer from a sysfs file, or None."""
-    if not path.is_file():
-        return None
-    try:
-        return int(path.read_text().strip())
-    except (ValueError, OSError):
-        return None
-
-
-def read_str(path: Path) -> str | None:
-    """Read a string from a sysfs file, or None."""
-    if not path.is_file():
-        return None
-    try:
-        return path.read_text().strip()
-    except OSError:
-        return None
-
-
-def format_time(sec: float) -> str:
-    """Format seconds into hours and minutes."""
-    if sec < 0 or sec > 86400 * 7:
-        return "N/A"
-    h = int(sec // 3600)
-    m = int((sec % 3600) // 60)
-    s = int(sec % 60)
-    if h > 0:
-        return f"{h}h {m:02d}m"
-    return f"{m}m {s:02d}s"
-
-
-def make_progress_bar(percent: float, width: int = 20, use_color: bool = True) -> str:
-    """Generate a visual text progress bar for battery charge."""
-    clamped = max(0.0, min(100.0, percent))
-    filled_len = int(round(width * clamped / 100.0))
-    empty_len = width - filled_len
-    bar = "█" * filled_len + "░" * empty_len
-
-    if not use_color:
-        return f"[{bar}]"
-
-    if clamped >= 50.0:
-        color = "\033[32m"  # Green
-    elif clamped >= 20.0:
-        color = "\033[33m"  # Yellow
-    else:
-        color = "\033[31m"  # Red
-    reset = "\033[0m"
-
-    return f"[{color}{bar}{reset}]"
+from common import (
+    DEFAULT_POWER_SUPPLY_DIR,
+    find_batteries,
+    read_sysfs_int as read_int,
+    read_sysfs_str as read_str,
+    format_time,
+    make_progress_bar,
+    Colors,
+    supports_color,
+)
 
 
 def get_snapshot(bat_dir: Path, factor: float = 80 * 0.998) -> dict:
